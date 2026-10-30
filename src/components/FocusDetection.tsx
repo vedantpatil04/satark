@@ -120,78 +120,86 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
       isFocused: false,
       confidence: 0,
       status: "loading",
-      loadingStage: "Requesting camera access...",
+      loadingStage: "Starting camera & AI vision engine...",
     });
 
     try {
-      // 1. Request camera stream
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-      });
+      // 1. Load OpenCV and Haar Cascades concurrently
+      const modelsPromise = (async () => {
+        if (isMountedRef.current) {
+          setFocusState((prev) => ({
+            ...prev,
+            loadingStage: "Loading OpenCV computer vision engine...",
+          }));
+        }
+        const cv = await loadOpenCv();
 
-      if (!isMountedRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
+        if (isMountedRef.current) {
+          setFocusState((prev) => ({
+            ...prev,
+            loadingStage: "Loading face & eye detection models...",
+          }));
+        }
 
-      streamRef.current = stream;
+        // Load Haar Cascade XML files into virtual filesystem
+        await loadFileToOpenCV('/models/haarcascade_frontalface_default.xml', 'haarcascade_frontalface_default.xml');
+        await loadFileToOpenCV('/models/haarcascade_eye.xml', 'haarcascade_eye.xml');
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await new Promise<void>((resolve) => {
-          if (!videoRef.current) return resolve();
-          if (videoRef.current.readyState >= 2) return resolve();
-          videoRef.current.onloadedmetadata = () => resolve();
+        if (!faceCascadeRef.current) {
+          faceCascadeRef.current = new cv.CascadeClassifier();
+        }
+        faceCascadeRef.current.load('haarcascade_frontalface_default.xml');
+
+        if (!eyeCascadeRef.current) {
+          eyeCascadeRef.current = new cv.CascadeClassifier();
+        }
+        eyeCascadeRef.current.load('haarcascade_eye.xml');
+
+        // Load Teachable Machine posture model in parallel (optional)
+        try {
+          const modelURL = window.location.origin + "/models/model.json";
+          const metadataURL = window.location.origin + "/models/metadata.json";
+          const tmModel = await tmImage.load(modelURL, metadataURL);
+          tmModelRef.current = tmModel;
+        } catch (tmErr) {
+          console.warn("Teachable machine model load warning, proceeding with Haar Cascades:", tmErr);
+        }
+
+        return cv;
+      })();
+
+      // 2. Request camera stream (with timeout)
+      const cameraPromise = (async () => {
+        if (isMountedRef.current) {
+          setFocusState((prev) => ({
+            ...prev,
+            loadingStage: "Connecting to camera (please allow browser permission)...",
+          }));
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
         });
-        await videoRef.current.play().catch(() => {});
-      }
 
-      // 2. Load OpenCV.js
-      if (isMountedRef.current) {
-        setFocusState((prev) => ({
-          ...prev,
-          loadingStage: "Loading OpenCV computer vision engine...",
-        }));
-      }
-      const cv = await loadOpenCv();
+        if (!isMountedRef.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return null;
+        }
 
-      // 3. Load Teachable Machine Posture Model
-      if (isMountedRef.current) {
-        setFocusState((prev) => ({
-          ...prev,
-          loadingStage: "Loading posture classification model...",
-        }));
-      }
+        streamRef.current = stream;
 
-      try {
-        const modelURL = window.location.origin + "/models/model.json";
-        const metadataURL = window.location.origin + "/models/metadata.json";
-        const tmModel = await tmImage.load(modelURL, metadataURL);
-        tmModelRef.current = tmModel;
-      } catch (tmErr) {
-        console.warn("Teachable machine model load warning, proceeding with Haar Cascades:", tmErr);
-      }
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch((playErr) => {
+            console.warn("Video auto-play warning:", playErr);
+          });
+        }
 
-      // 4. Load Haar Cascades into OpenCV Virtual Filesystem
-      if (isMountedRef.current) {
-        setFocusState((prev) => ({
-          ...prev,
-          loadingStage: "Loading Haar Cascade face & eye detectors...",
-        }));
-      }
+        return stream;
+      })();
 
-      await loadFileToOpenCV('/models/haarcascade_frontalface_default.xml', 'haarcascade_frontalface_default.xml');
-      await loadFileToOpenCV('/models/haarcascade_eye.xml', 'haarcascade_eye.xml');
-
-      if (!faceCascadeRef.current) {
-        faceCascadeRef.current = new cv.CascadeClassifier();
-      }
-      faceCascadeRef.current.load('haarcascade_frontalface_default.xml');
-
-      if (!eyeCascadeRef.current) {
-        eyeCascadeRef.current = new cv.CascadeClassifier();
-      }
-      eyeCascadeRef.current.load('haarcascade_eye.xml');
+      // Wait for both models and camera to be ready
+      await Promise.all([modelsPromise, cameraPromise]);
 
       if (isMountedRef.current) {
         setFocusState((prev) => ({
@@ -206,9 +214,11 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
       if (isMountedRef.current) {
         let msg = err.message || "Failed to initialize camera and AI models.";
         if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-          msg = "Camera permission denied. Please allow camera access in your browser.";
+          msg = "Camera permission was not granted. Please click the camera/lock icon in your browser address bar, set Camera to 'Allow', and click Retry.";
         } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
           msg = "No webcam found. Please connect a camera to use AI Focus monitoring.";
+        } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+          msg = "Webcam is already in use by another app (e.g. Zoom, Teams, or another browser window). Please close that app and click Retry.";
         }
         setFocusState({
           isFocused: false,
@@ -218,7 +228,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
         });
       }
     }
-  }, [loadOpenCv]);
+  }, [loadOpenCv, startDetectionLoop]);
 
   // Detection Loop
   const startDetectionLoop = useCallback(() => {
