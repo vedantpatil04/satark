@@ -73,7 +73,7 @@ export const TeacherFocus: React.FC = () => {
                         {fs.goal_title}
                       </CardTitle>
                       <span className="text-[10px] text-muted-foreground block font-mono">
-                        Student: {fs.student_id.substring(0, 10)}...
+                        Student: {fs.student_id ? `${fs.student_id.substring(0, 10)}...` : "Active"}
                       </span>
                     </div>
                   </div>

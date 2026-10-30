@@ -517,7 +517,7 @@ export const TeacherExamDetail: React.FC = () => {
                       {submissions.map((s) => (
                         <tr key={s.id} className="hover:bg-muted/30">
                           <td className="py-3 pl-2 font-medium text-foreground">
-                            {s.student_name || s.student_id.substring(0, 8)}
+                            {s.student_name || (s.student_id ? s.student_id.substring(0, 8) : "Student")}
                           </td>
                           <td className="py-3">
                             <Badge variant="outline" className="text-[10px] capitalize">
@@ -590,7 +590,7 @@ export const TeacherExamDetail: React.FC = () => {
                           </Badge>
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
-                          Source: <span className="font-mono">{alt.evidence_summary?.source || "agent"}</span> • Student ID: <span className="font-mono">{alt.student_id.substring(0, 8)}...</span> • Time: {new Date(alt.created_at).toLocaleTimeString()}
+                          Source: <span className="font-mono">{alt.evidence_summary?.source || "agent"}</span> • Student ID: <span className="font-mono">{alt.student_id ? `${alt.student_id.substring(0, 8)}...` : "Student"}</span> • Time: {new Date(alt.created_at).toLocaleTimeString()}
                         </p>
                         {alt.proctor_notes && (
                           <p className="text-xs text-muted-foreground italic mt-1 bg-muted/40 p-1.5 rounded">

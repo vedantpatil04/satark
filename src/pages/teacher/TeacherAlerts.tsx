@@ -134,8 +134,8 @@ export const TeacherAlerts: React.FC = () => {
 
                       <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                         <span>Time: {new Date(alt.created_at).toLocaleString()}</span>
-                        <span>Device: <span className="font-mono">{alt.device_id.substring(0, 10)}...</span></span>
-                        <span>Exam Session: <span className="font-mono">{alt.session_id.substring(0, 8)}...</span></span>
+                        <span>Device: <span className="font-mono">{alt.device_id ? `${alt.device_id.substring(0, 10)}...` : "Web Client"}</span></span>
+                        <span>Exam Session: <span className="font-mono">{alt.session_id ? `${alt.session_id.substring(0, 8)}...` : "General"}</span></span>
                       </div>
 
                       {/* Evidence Summary Preview */}

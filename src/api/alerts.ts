@@ -2,18 +2,18 @@ import { apiClient } from "./client";
 
 export interface Alert {
   id: string;
-  session_id: string;
-  student_id: string;
-  device_id: string;
-  primary_event_id?: string;
+  session_id?: string | null;
+  student_id?: string | null;
+  device_id?: string | null;
+  primary_event_id?: string | null;
   alert_type: string;
   severity: "low" | "medium" | "high" | "critical";
   description: string;
-  evidence_summary?: Record<string, any>;
+  evidence_summary?: Record<string, any> | null;
   is_acknowledged: boolean;
-  acknowledged_by?: string;
-  acknowledged_at?: string;
-  proctor_notes?: string;
+  acknowledged_by?: string | null;
+  acknowledged_at?: string | null;
+  proctor_notes?: string | null;
   created_at: string;
 }
 

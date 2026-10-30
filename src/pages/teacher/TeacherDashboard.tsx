@@ -43,11 +43,11 @@ export const TeacherDashboard: React.FC = () => {
         alertsApi.list().catch(() => []),
       ]);
 
-      setClassrooms(clsData);
-      setExams(exmData);
-      setDevices(devData);
-      setFocusSessions(focData);
-      setAlerts(alrtData);
+      setClassrooms(Array.isArray(clsData) ? clsData : []);
+      setExams(Array.isArray(exmData) ? exmData : []);
+      setDevices(Array.isArray(devData) ? devData : []);
+      setFocusSessions(Array.isArray(focData) ? focData : []);
+      setAlerts(Array.isArray(alrtData) ? alrtData : []);
     } catch (err: any) {
       toast.error("Failed to load dashboard metrics");
     } finally {
@@ -217,7 +217,7 @@ export const TeacherDashboard: React.FC = () => {
                     <div>
                       <p className="font-semibold text-foreground">{alt.description}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {new Date(alt.created_at).toLocaleTimeString()} • Device: {alt.device_id.substring(0, 8)}...
+                        {new Date(alt.created_at).toLocaleTimeString()} • Device: {alt.device_id ? `${alt.device_id.substring(0, 8)}...` : "Web Client"}
                       </p>
                     </div>
                   </div>

@@ -227,7 +227,7 @@ export const TeacherClassroomDetail: React.FC = () => {
                       <TableCell className="text-muted-foreground flex items-center gap-1.5">
                         <Mail className="w-3.5 h-3.5 text-muted-foreground/70" /> {stu.email}
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{stu.student_id.substring(0, 12)}...</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{stu.student_id ? `${stu.student_id.substring(0, 12)}...` : "—"}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(stu.enrolled_at).toLocaleDateString()}
                       </TableCell>
