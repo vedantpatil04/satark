@@ -45,7 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     refreshUser();
 
     // 2. Set up Supabase Auth Listener if publishable key is present
-    if (SUPABASE_PUBLISHABLE_KEY) {
+    if (SUPABASE_PUBLISHABLE_KEY && supabase) {
       const {
         data: { subscription },
       } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -79,7 +79,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
-      if (SUPABASE_PUBLISHABLE_KEY) {
+      if (SUPABASE_PUBLISHABLE_KEY && supabase) {
         await supabase.auth.signOut();
       }
     } catch (e) {

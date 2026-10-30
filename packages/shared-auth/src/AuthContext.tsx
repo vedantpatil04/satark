@@ -48,7 +48,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     refreshUser();
 
-    if (SUPABASE_PUBLISHABLE_KEY) {
+    if (SUPABASE_PUBLISHABLE_KEY && supabase) {
       const {
         data: { subscription },
       } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -88,7 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
-      if (SUPABASE_PUBLISHABLE_KEY) {
+      if (SUPABASE_PUBLISHABLE_KEY && supabase) {
         await supabase.auth.signOut();
       }
     } catch (e) {

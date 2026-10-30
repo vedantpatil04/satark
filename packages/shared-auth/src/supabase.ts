@@ -12,23 +12,28 @@ export const SUPABASE_PUBLISHABLE_KEY =
 
 let supabaseClient: SupabaseClient | null = null;
 
-export const getSupabase = (): SupabaseClient => {
+export const getSupabase = (): SupabaseClient | null => {
   if (!supabaseClient) {
-    if (!SUPABASE_PUBLISHABLE_KEY) {
+    if (!SUPABASE_PUBLISHABLE_KEY || typeof SUPABASE_PUBLISHABLE_KEY !== "string" || SUPABASE_PUBLISHABLE_KEY.trim() === "") {
       console.warn(
         "VITE_SUPABASE_PUBLISHABLE_KEY is not configured. Falling back to local backend auth mode."
       );
+      return null;
     }
-    supabaseClient = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-      auth: {
-        autoRefreshToken: true,
-        persistSession: true,
-        detectSessionInUrl: true,
-      },
-    });
+    try {
+      supabaseClient = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY.trim(), {
+        auth: {
+          autoRefreshToken: true,
+          persistSession: true,
+          detectSessionInUrl: true,
+        },
+      });
+    } catch (err) {
+      console.warn("Could not initialize Supabase client:", err);
+      return null;
+    }
   }
   return supabaseClient;
 };
 
 export const supabase = getSupabase();
-
