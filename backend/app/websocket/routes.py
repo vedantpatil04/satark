@@ -1,6 +1,8 @@
 import json
+import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
+from backend.app.core.config import settings
 from backend.app.core.security import verify_and_consume_ws_ticket
 from backend.app.websocket.manager import ws_manager
 from backend.app.core.database import SessionLocal
@@ -10,13 +12,34 @@ from backend.app.services.event_service import ingest_event_envelope
 
 router = APIRouter(tags=["WebSockets"])
 
+LAN_ORIGIN_PATTERN = re.compile(
+    r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$"
+)
+
+
+def is_valid_websocket_origin(origin: str | None) -> bool:
+    if not origin:
+        return True  # Native mobile agents & desktop monitor
+    clean_origin = origin.rstrip("/")
+    if clean_origin in settings.CORS_ORIGINS:
+        return True
+    if LAN_ORIGIN_PATTERN.match(clean_origin):
+        return True
+    return False
+
 
 @router.websocket("/ws/teacher")
 async def websocket_teacher_endpoint(
     websocket: WebSocket,
     ticket: str = Query(...)
 ):
-    # Verify short-lived, single-use ticket
+    # 1. Validate explicit WebSocket origin
+    origin = websocket.headers.get("origin")
+    if not is_valid_websocket_origin(origin):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Origin not allowed")
+        return
+
+    # 2. Verify short-lived, single-use ticket
     ticket_data = verify_and_consume_ws_ticket(ticket, expected_channel="teacher")
     if not ticket_data or ticket_data.get("role") != "teacher":
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -61,6 +84,13 @@ async def websocket_student_endpoint(
     websocket: WebSocket,
     ticket: str = Query(...)
 ):
+    # 1. Validate explicit WebSocket origin
+    origin = websocket.headers.get("origin")
+    if not is_valid_websocket_origin(origin):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Origin not allowed")
+        return
+
+    # 2. Verify short-lived, single-use ticket
     ticket_data = verify_and_consume_ws_ticket(ticket, expected_channel="student")
     if not ticket_data or ticket_data.get("role") != "student":
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)

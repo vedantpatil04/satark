@@ -190,8 +190,13 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
   };
 
   // 3. Stop detection and cleanly release camera stream, timers, and OpenCV memory
-  const stopVisionPipeline = useCallback(() => {
-    logStep("STOP_VISION_PIPELINE", "Releasing camera stream, memory and timers");
+  const stopVisionPipeline = useCallback((reason: string = "explicit") => {
+    const hadActiveResources =
+      isDetectingRef.current || isInitializingRef.current || streamRef.current !== null;
+
+    if (hadActiveResources) {
+      logStep("STOP_VISION_PIPELINE", { reason });
+    }
     isDetectingRef.current = false;
     isProcessingFrameRef.current = false;
     isInitializingRef.current = false;
@@ -662,7 +667,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
-      stopVisionPipeline();
+      stopVisionPipeline("component_unmount");
     };
   }, [stopVisionPipeline]);
 
