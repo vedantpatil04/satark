@@ -86,7 +86,7 @@ export const StudentFocus: React.FC = () => {
     const init = async () => {
       try {
         const [crList, sessions] = await Promise.all([
-          classroomsApi.listEnrolled().catch(() => []),
+          (classroomsApi.listEnrolled || classroomsApi.list)().catch(() => []),
           focusApi.list().catch(() => []),
         ]);
         setClassrooms(crList);

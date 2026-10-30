@@ -22,6 +22,9 @@ export interface EnrolledStudent {
 export const classroomsApi = {
   list: () => apiClient<Classroom[]>("/classrooms"),
 
+  // Backward-compatible alias for enrolled classrooms list
+  listEnrolled: () => apiClient<Classroom[]>("/classrooms"),
+
   get: (id: string) => apiClient<Classroom>(`/classrooms/${id}`),
 
   create: (payload: { title: string; subject_code?: string; description?: string }) =>
