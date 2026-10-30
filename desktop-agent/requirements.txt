@@ -1,0 +1,5 @@
+# Smart Classroom Desktop Monitoring Agent - Requirements
+psutil>=5.9.0
+requests>=2.31.0
+websockets>=12.0
+

@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Production build
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Cache
+.cache/
+.parcel-cache/
+
+# Testing
+coverage/
+*.coverage
+.nyc_output
+
+# Python (if you have ML model training files)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+*.ipynb_checkpoints
+
+# ML Model files (optional - if models are too large)
+# public/models/*.bin
+# Uncomment above if model files are >100MB
+
+# SQLite databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Misc
+*.swp
+*.swo
+*~
+.sass-cache/

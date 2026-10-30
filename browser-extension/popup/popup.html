@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SATARK Integrity Companion</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="logo-box">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+      </svg>
+      <span>SATARK Companion</span>
+    </div>
+    <span class="version">v1.0.0</span>
+  </div>
+
+  <div class="card status-card">
+    <div class="status-indicator" id="statusDot"></div>
+    <div>
+      <div class="status-title" id="statusTitle">Checking status...</div>
+      <div class="status-desc" id="statusDesc">Initializing extension runtime</div>
+    </div>
+  </div>
+
+  <div class="card session-card" id="sessionCard" style="display: none;">
+    <div class="session-label">Active Examination</div>
+    <div class="session-id" id="examIdText">ID: -</div>
+    <div class="session-badge">Proctored Session</div>
+  </div>
+
+  <div class="privacy-box">
+    <div class="privacy-title">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="16" x2="12" y2="12"></line>
+        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+      </svg>
+      Privacy & Integrity Guarantee
+    </div>
+    <ul class="privacy-list">
+      <li>Strictly NO keystroke recording or password capture.</li>
+      <li>NO private file, microphone, or webcam monitoring.</li>
+      <li>Only inspects domain boundaries during active exams.</li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    <button id="checkConnBtn" class="btn">Test Backend Uplink</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+

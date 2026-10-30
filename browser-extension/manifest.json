@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "SATARK Exam Integrity Companion",
+  "version": "1.0.0",
+  "description": "Official companion extension for the SATARK Smart Classroom Integrity Platform. Enables transparent browser exam supervision.",
+  "permissions": [
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "http://10.106.76.105/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "SATARK Exam Integrity Companion"
+  },
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost:5173/student/exams/*",
+        "http://127.0.0.1:5173/student/exams/*",
+        "http://10.106.76.105:5173/student/exams/*",
+        "http://localhost/student/exams/*"
+      ],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
