@@ -8,7 +8,7 @@ export const SUPABASE_URL =
 export const SUPABASE_PUBLISHABLE_KEY =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  "";
+  "sb_publishable_GnFiy75GmyubQB_4N3o_ug_KKtMJWlW";
 
 let supabaseClient: SupabaseClient | null = null;
 

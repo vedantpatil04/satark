@@ -1,11 +1,25 @@
-import { useEffect, useRef, useState, useCallback } from "react";
-import { Camera, AlertCircle, CheckCircle2, Loader2, Bell, Eye, EyeOff, RefreshCw, UserCheck, UserX } from "lucide-react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import {
+  Camera,
+  CameraOff,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Bell,
+  Eye,
+  RefreshCw,
+  UserCheck,
+  UserX,
+  Play,
+  Square,
+  Activity,
+} from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import * as tmImage from "@teachablemachine/image";
 import { startContinuousAlarm, stopContinuousAlarm, isAlarmPlaying } from "@/utils/beep";
 
-// Allow TypeScript to recognize the globally loaded OpenCV.js
+// Allow TypeScript to recognize globally loaded OpenCV.js
 declare global {
   interface Window {
     cv: any;
@@ -13,10 +27,12 @@ declare global {
   }
 }
 
+export type VisionMonitorStatus = "idle" | "loading" | "detecting" | "error";
+
 interface FocusState {
   isFocused: boolean;
   confidence: number;
-  status: "loading" | "ready" | "detecting" | "error";
+  status: VisionMonitorStatus;
   loadingStage?: string;
   error?: string;
   predictions?: { className: string; probability: number }[];
@@ -24,42 +40,98 @@ interface FocusState {
 
 interface FocusDetectionProps {
   onDistractedTooLong?: () => void;
+  onStatusChange?: (status: VisionMonitorStatus) => void;
 }
 
-const OPENCV_CDN_URL = "https://docs.opencv.org/4.8.0/opencv.js";
+// Processing resolution downsampled to 320x240 for fast OpenCV CPU execution (<25ms)
+const PROC_WIDTH = 320;
+const PROC_HEIGHT = 240;
+// Frame rate: 300ms delay between frames (~3.3 FPS)
+const FRAME_INTERVAL_MS = 300;
 
-const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
+const FocusDetection: React.FC<FocusDetectionProps> = ({
+  onDistractedTooLong,
+  onStatusChange,
+}) => {
+  // Stable refs for parent callbacks
+  const onDistractedTooLongRef = useRef(onDistractedTooLong);
+  useEffect(() => {
+    onDistractedTooLongRef.current = onDistractedTooLong;
+  }, [onDistractedTooLong]);
+
+  const onStatusChangeRef = useRef(onStatusChange);
+  useEffect(() => {
+    onStatusChangeRef.current = onStatusChange;
+  }, [onStatusChange]);
+
+  // Lifecycle & Concurrency Guards
   const isMountedRef = useRef<boolean>(true);
+  const isInitializingRef = useRef<boolean>(false);
+  const isInitializedRef = useRef<boolean>(false);
   const isDetectingRef = useRef<boolean>(false);
+  const isProcessingFrameRef = useRef<boolean>(false);
+
+  // DOM & Media Refs
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const animationFrameRef = useRef<number>();
   const loopTimerRef = useRef<any>(null);
+  const animationFrameRef = useRef<number>();
+  const initTimeoutRef = useRef<any>(null);
 
   // Model Refs
   const tmModelRef = useRef<tmImage.CustomMobileNet | null>(null);
   const faceCascadeRef = useRef<any>(null);
   const eyeCascadeRef = useRef<any>(null);
 
+  // Tracking Counters
   const distractedTimeRef = useRef<number>(0);
   const focusedTimeRef = useRef<number>(0);
 
-  // Detection Status
+  // Performance Profiler Ref
+  const profilerRef = useRef({
+    frameCount: 0,
+    totalProcessingMs: 0,
+    lastFrameMs: 0,
+    lastFaceMs: 0,
+    lastEyeMs: 0,
+    lastTmMs: 0,
+    fps: 0,
+    lastFpsTimestamp: performance.now(),
+    framesThisSecond: 0,
+  });
+
+  // Component UI State (Starts as "idle" - NEVER auto-starts on mount)
   const [faceDetected, setFaceDetected] = useState<boolean>(false);
   const [eyesDetected, setEyesDetected] = useState<boolean>(false);
   const [alarmActive, setAlarmActive] = useState<boolean>(false);
+  const [perfStats, setPerfStats] = useState<{ frameMs: number; fps: number }>({
+    frameMs: 0,
+    fps: 0,
+  });
 
   const [focusState, setFocusState] = useState<FocusState>({
     isFocused: false,
     confidence: 0,
-    status: "loading",
-    loadingStage: "Starting camera & AI vision engine...",
+    status: "idle",
   });
 
-  // 1. Ensure OpenCV.js script is loaded and initialized
+  // Notify parent of status change safely
+  const updateStatus = useCallback((status: VisionMonitorStatus, stage?: string, error?: string) => {
+    if (!isMountedRef.current) return;
+    setFocusState((prev) => ({
+      ...prev,
+      status,
+      loadingStage: stage,
+      error: error,
+    }));
+    onStatusChangeRef.current?.(status);
+  }, []);
+
+  // 1. Load OpenCV.js with fast resolution & timeout protection
   const loadOpenCv = useCallback((): Promise<any> => {
     return new Promise((resolve, reject) => {
+      // If already initialized in window, resolve immediately
       if (window.cv && window.cv.Mat && window.cv.CascadeClassifier) {
         return resolve(window.cv);
       }
@@ -68,14 +140,14 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
       let script = document.querySelector(`script[src*="opencv.js"]`) as HTMLScriptElement;
       if (!script) {
         script = document.createElement("script");
-        script.src = OPENCV_CDN_URL;
+        script.src = "/opencv.js";
         script.async = true;
         script.type = "text/javascript";
         document.body.appendChild(script);
       }
 
       const startTime = Date.now();
-      const timeoutMs = 30000; // 30 seconds max for CDN download
+      const timeoutMs = 15000;
 
       const interval = setInterval(() => {
         if (!isMountedRef.current) {
@@ -88,122 +160,207 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           resolve(window.cv);
         } else if (Date.now() - startTime > timeoutMs) {
           clearInterval(interval);
-          reject(new Error("OpenCV runtime download timed out. Check internet connection."));
+          reject(new Error("OpenCV WebAssembly engine timed out during load."));
         }
-      }, 200);
+      }, 100);
     });
   }, []);
 
-  // 2. Write remote XML file into OpenCV virtual filesystem safely
+  // 2. Load model XML into OpenCV virtual filesystem safely
   const loadFileToOpenCV = async (url: string, path: string) => {
     const cv = window.cv;
     const response = await fetch(url);
     if (!response.ok) {
-      throw new Error(`Failed to load ${url} (HTTP ${response.status})`);
+      throw new Error(`Failed to load ${path} (HTTP ${response.status})`);
     }
     const buffer = await response.arrayBuffer();
     const data = new Uint8Array(buffer);
 
-    // Clean up existing virtual file if already present (prevents ErrnoError: 17 on re-mount)
     try {
-      cv.FS_unlink('/' + path);
+      cv.FS_unlink("/" + path);
     } catch {
       // Ignored if file does not exist yet
     }
-    cv.FS_createDataFile('/', path, data, true, false, false);
+    cv.FS_createDataFile("/", path, data, true, false, false);
   };
 
-  // 3. Detection Loop (Declared BEFORE initPipeline to prevent TDZ ReferenceError)
+  // 3. Stop detection and cleanly release camera stream, timers, and OpenCV memory
+  const stopVisionPipeline = useCallback(() => {
+    console.log("[FocusDetection] Stopping AI Vision and releasing resources...");
+    isDetectingRef.current = false;
+    isProcessingFrameRef.current = false;
+    isInitializingRef.current = false;
+    isInitializedRef.current = false;
+
+    // Clear initialization timeout
+    if (initTimeoutRef.current) {
+      clearTimeout(initTimeoutRef.current);
+      initTimeoutRef.current = null;
+    }
+
+    // Cancel detection loops & timers
+    if (loopTimerRef.current) {
+      clearTimeout(loopTimerRef.current);
+      loopTimerRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = undefined;
+    }
+
+    // Stop and release camera tracks
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch (e) {
+          console.warn("Track stop error:", e);
+        }
+      });
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+
+    // Silence alarm
+    stopContinuousAlarm();
+
+    // Free OpenCV classifiers from C++ heap
+    try {
+      if (faceCascadeRef.current) {
+        faceCascadeRef.current.delete();
+        faceCascadeRef.current = null;
+      }
+      if (eyeCascadeRef.current) {
+        eyeCascadeRef.current.delete();
+        eyeCascadeRef.current = null;
+      }
+    } catch (e) {
+      console.warn("Classifier cleanup warning:", e);
+    }
+
+    // Reset UI state
+    if (isMountedRef.current) {
+      setFaceDetected(false);
+      setEyesDetected(false);
+      setAlarmActive(false);
+      setPerfStats({ frameMs: 0, fps: 0 });
+      setFocusState({
+        isFocused: false,
+        confidence: 0,
+        status: "idle",
+      });
+    }
+    onStatusChangeRef.current?.("idle");
+  }, []);
+
+  // 4. Main Detection Loop (3 FPS, 320x240, Non-Blocking, Fully Memoized)
   const startDetectionLoop = useCallback(() => {
     if (isDetectingRef.current) return;
     isDetectingRef.current = true;
+    console.log("[FocusDetection] Detection loop activated at 320x240 @ 3 FPS");
 
     const cv = window.cv;
 
     const detect = async () => {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || !isDetectingRef.current) return;
+
       const video = videoRef.current;
       const canvas = canvasRef.current;
 
+      // Video must be ready with valid dimensions
       if (!video || !canvas || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
-        // Video not ready yet, retry in 300ms
-        loopTimerRef.current = setTimeout(() => {
-          animationFrameRef.current = requestAnimationFrame(detect);
-        }, 300);
+        if (isMountedRef.current && isDetectingRef.current) {
+          loopTimerRef.current = setTimeout(() => {
+            animationFrameRef.current = requestAnimationFrame(detect);
+          }, 200);
+        }
         return;
       }
+
+      // Re-entrancy guard: skip if previous frame is still processing
+      if (isProcessingFrameRef.current) {
+        if (isMountedRef.current && isDetectingRef.current) {
+          loopTimerRef.current = setTimeout(() => {
+            animationFrameRef.current = requestAnimationFrame(detect);
+          }, FRAME_INTERVAL_MS);
+        }
+        return;
+      }
+
+      isProcessingFrameRef.current = true;
+      const frameStartTime = performance.now();
 
       let src: any = null;
       let gray: any = null;
       let faces: any = null;
+      let areFacesVisible = false;
+      let areEyesVisible = false;
+      let isTmFocused = true;
+      let postureConfidence = 0.9;
+      let sortedPredictions: any[] = [];
+      let faceMs = 0;
+      let eyeMs = 0;
+      let tmMs = 0;
 
       try {
-        // -------------------------------------------------------------
-        // A. Teachable Machine Posture Inference
-        // -------------------------------------------------------------
-        let isTmFocused = true;
-        let postureConfidence = 0.85;
-        let sortedPredictions: { className: string; probability: number }[] = [];
-
+        // --- A. Teachable Machine Posture Check (Non-blocking) ---
         if (tmModelRef.current) {
           try {
+            const tmStart = performance.now();
             const tmPredictions = await tmModelRef.current.predict(video);
             sortedPredictions = tmPredictions.sort((a, b) => b.probability - a.probability);
             const topPrediction = sortedPredictions[0];
-            if (topPrediction) {
-              isTmFocused = topPrediction.className.toLowerCase().includes("focused");
-              postureConfidence = topPrediction.probability;
-            }
-          } catch (e) {
-            // TM predict error, ignore and fall back
+            isTmFocused = topPrediction.className.toLowerCase().includes("focused");
+            postureConfidence = topPrediction.probability;
+            tmMs = performance.now() - tmStart;
+          } catch (tmErr) {
+            console.warn("[FocusDetection] TM inference warning:", tmErr);
           }
         }
 
-        // -------------------------------------------------------------
-        // B. OpenCV Haar Cascade Face & Eye Detection
-        // -------------------------------------------------------------
-        const ctx = canvas.getContext("2d");
-        let areFacesVisible = false;
-        let areEyesVisible = false;
-
-        if (ctx && cv && faceCascadeRef.current && eyeCascadeRef.current) {
-          canvas.width = Math.min(video.videoWidth, 320);
-          canvas.height = Math.min(video.videoHeight, 240);
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        // --- B. Downsampled OpenCV Frame Processing (320x240) ---
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (ctx) {
+          canvas.width = PROC_WIDTH;
+          canvas.height = PROC_HEIGHT;
+          ctx.drawImage(video, 0, 0, PROC_WIDTH, PROC_HEIGHT);
 
           src = cv.imread(canvas);
           gray = new cv.Mat();
           cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
           faces = new cv.RectVector();
-          faceCascadeRef.current.detectMultiScale(gray, faces, 1.25, 4);
+          if (faceCascadeRef.current) {
+            const faceStart = performance.now();
+            // Scale factor 1.25, minNeighbors 4 for 320x240
+            faceCascadeRef.current.detectMultiScale(gray, faces, 1.25, 4);
+            faceMs = performance.now() - faceStart;
 
-          if (faces.size() > 0) {
-            areFacesVisible = true;
-            const face = faces.get(0);
-            const roiGray = gray.roi(face);
-            const eyes = new cv.RectVector();
+            if (faces.size() > 0) {
+              areFacesVisible = true;
+              const face = faces.get(0);
+              const roiGray = gray.roi(face);
+              const eyes = new cv.RectVector();
 
-            // Run eye detection inside upper portion of face ROI
-            eyeCascadeRef.current.detectMultiScale(roiGray, eyes, 1.15, 3);
-            if (eyes.size() >= 1) {
-              areEyesVisible = true;
+              if (eyeCascadeRef.current) {
+                const eyeStart = performance.now();
+                eyeCascadeRef.current.detectMultiScale(roiGray, eyes, 1.15, 3);
+                eyeMs = performance.now() - eyeStart;
+                if (eyes.size() >= 1) {
+                  areEyesVisible = true;
+                }
+              }
+
+              roiGray.delete();
+              eyes.delete();
             }
-
-            roiGray.delete();
-            eyes.delete();
-          }
-
-          if (isMountedRef.current) {
-            setFaceDetected(areFacesVisible);
-            setEyesDetected(areEyesVisible);
           }
         }
 
-        // -------------------------------------------------------------
-        // C. Hybrid Decision & Attention Alert Logic
-        // -------------------------------------------------------------
-        // Focused condition: Face detected AND either eyes detected or high posture focus
+        // --- C. Hybrid Attention Decision ---
         const isCurrentlyFocused = areFacesVisible && (areEyesVisible || isTmFocused);
 
         if (!isCurrentlyFocused) {
@@ -213,7 +370,7 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           if (distractedTimeRef.current >= 12 && !isAlarmPlaying()) {
             startContinuousAlarm(1200, 400, 300);
             if (isMountedRef.current) setAlarmActive(true);
-            onDistractedTooLong?.();
+            onDistractedTooLongRef.current?.();
           }
         } else {
           distractedTimeRef.current = 0;
@@ -225,277 +382,339 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           }
         }
 
+        // Update detection indicator states only on changes
         if (isMountedRef.current) {
-          setFocusState({
-            isFocused: isCurrentlyFocused,
-            confidence: postureConfidence,
-            status: "detecting",
-            predictions: sortedPredictions,
+          setFaceDetected((prev) => (prev !== areFacesVisible ? areFacesVisible : prev));
+          setEyesDetected((prev) => (prev !== areEyesVisible ? areEyesVisible : prev));
+
+          setFocusState((prev) => {
+            if (
+              prev.isFocused === isCurrentlyFocused &&
+              Math.abs(prev.confidence - postureConfidence) < 0.05 &&
+              prev.status === "detecting"
+            ) {
+              return prev; // Skip render
+            }
+            return {
+              isFocused: isCurrentlyFocused,
+              confidence: postureConfidence,
+              status: "detecting",
+              predictions: sortedPredictions,
+            };
           });
         }
+
+        // Profiler accounting
+        const totalFrameMs = performance.now() - frameStartTime;
+        const p = profilerRef.current;
+        p.frameCount += 1;
+        p.framesThisSecond += 1;
+        p.lastFrameMs = Math.round(totalFrameMs);
+        p.lastFaceMs = Math.round(faceMs);
+        p.lastEyeMs = Math.round(eyeMs);
+        p.lastTmMs = Math.round(tmMs);
+
+        const now = performance.now();
+        if (now - p.lastFpsTimestamp >= 1000) {
+          p.fps = p.framesThisSecond;
+          p.framesThisSecond = 0;
+          p.lastFpsTimestamp = now;
+
+          if (isMountedRef.current) {
+            setPerfStats({ frameMs: p.lastFrameMs, fps: p.fps });
+          }
+
+          // Periodic console telemetry (every ~30 frames)
+          if (p.frameCount % 30 === 0) {
+            console.log(
+              `[AI Vision Profiler] Total: ${p.lastFrameMs}ms (Face: ${p.lastFaceMs}ms, Eyes: ${p.lastEyeMs}ms, TM: ${p.lastTmMs}ms) | FPS: ${p.fps}`
+            );
+          }
+        }
       } catch (loopErr) {
-        console.warn("Detection frame error:", loopErr);
+        console.warn("[FocusDetection] Frame loop warning:", loopErr);
       } finally {
-        // Free OpenCV memory allocations
+        // Guaranteed cleanup of OpenCV C++ allocations
         if (src) src.delete();
         if (gray) gray.delete();
         if (faces) faces.delete();
+        isProcessingFrameRef.current = false;
       }
 
-      // Schedule next frame in 1 second to preserve client battery & CPU
-      if (isMountedRef.current) {
+      // Schedule next frame with FRAME_INTERVAL_MS
+      if (isMountedRef.current && isDetectingRef.current) {
         loopTimerRef.current = setTimeout(() => {
           animationFrameRef.current = requestAnimationFrame(detect);
-        }, 1000);
+        }, FRAME_INTERVAL_MS);
       }
     };
 
     detect();
-  }, [onDistractedTooLong]);
+  }, []);
 
-  // 4. Main initialization pipeline
-  const initPipeline = useCallback(async () => {
-    if (!isMountedRef.current) return;
+  // 5. Explicit "Start AI Vision" Pipeline with 15-Second Timeout Protection
+  const startVisionPipeline = useCallback(async () => {
+    if (isInitializingRef.current || isDetectingRef.current) return;
+    isInitializingRef.current = true;
 
-    setFocusState({
-      isFocused: false,
-      confidence: 0,
-      status: "loading",
-      loadingStage: "Starting camera & AI vision engine...",
-    });
+    console.log("[FocusDetection] Starting AI Vision initialization sequence...");
+    updateStatus("loading", "Step 1/3: Requesting webcam access...");
+
+    // 15-Second Hard Timeout Guard
+    initTimeoutRef.current = setTimeout(() => {
+      if (isInitializingRef.current) {
+        console.error("[FocusDetection] Initialization sequence timed out after 15 seconds.");
+        stopVisionPipeline();
+        updateStatus(
+          "error",
+          undefined,
+          "Camera or AI model initialization timed out (15s). Please ensure camera is connected and allowed, then click Retry."
+        );
+      }
+    }, 15000);
+
+    const initStart = performance.now();
 
     try {
-      // 1. Load OpenCV and Haar Cascades concurrently
-      const modelsPromise = (async () => {
-        if (isMountedRef.current) {
-          setFocusState((prev) => ({
-            ...prev,
-            loadingStage: "Loading OpenCV computer vision engine...",
-          }));
-        }
-        const cv = await loadOpenCv();
+      // Phase 1: Connect to Camera Stream
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error(
+          "Camera API is unavailable. Please run on http://localhost or HTTPS in Google Chrome / Edge."
+        );
+      }
 
-        if (isMountedRef.current) {
-          setFocusState((prev) => ({
-            ...prev,
-            loadingStage: "Loading face & eye detection models...",
-          }));
-        }
+      const cameraStart = performance.now();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+      });
 
-        // Load Haar Cascade XML files into virtual filesystem
-        await loadFileToOpenCV('/models/haarcascade_frontalface_default.xml', 'haarcascade_frontalface_default.xml');
-        await loadFileToOpenCV('/models/haarcascade_eye.xml', 'haarcascade_eye.xml');
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
-        if (!faceCascadeRef.current) {
-          faceCascadeRef.current = new cv.CascadeClassifier();
-        }
-        faceCascadeRef.current.load('haarcascade_frontalface_default.xml');
-
-        if (!eyeCascadeRef.current) {
-          eyeCascadeRef.current = new cv.CascadeClassifier();
-        }
-        eyeCascadeRef.current.load('haarcascade_eye.xml');
-
-        // Load Teachable Machine posture model in parallel (optional)
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
         try {
-          const modelURL = window.location.origin + "/models/model.json";
-          const metadataURL = window.location.origin + "/models/metadata.json";
-          const tmModel = await tmImage.load(modelURL, metadataURL);
-          tmModelRef.current = tmModel;
-        } catch (tmErr) {
-          console.warn("Teachable machine model load warning, proceeding with Haar Cascades:", tmErr);
+          await videoRef.current.play();
+        } catch (playErr) {
+          console.warn("[FocusDetection] Video play warning:", playErr);
         }
+      }
+      console.log(`[AI Vision Profiler] Camera acquired in ${Math.round(performance.now() - cameraStart)}ms`);
 
-        return cv;
-      })();
+      // Phase 2: Load OpenCV & Haar Cascades
+      updateStatus("loading", "Step 2/3: Initializing OpenCV Haar Cascades...");
+      const cvStart = performance.now();
+      const cv = await loadOpenCv();
+      console.log(`[AI Vision Profiler] OpenCV.js ready in ${Math.round(performance.now() - cvStart)}ms`);
 
-      // 2. Request camera stream (with timeout)
-      const cameraPromise = (async () => {
-        if (isMountedRef.current) {
-          setFocusState((prev) => ({
-            ...prev,
-            loadingStage: "Connecting to camera (please allow browser permission)...",
-          }));
-        }
+      const cascadeStart = performance.now();
+      await loadFileToOpenCV("/models/haarcascade_frontalface_default.xml", "haarcascade_frontalface_default.xml");
+      await loadFileToOpenCV("/models/haarcascade_eye.xml", "haarcascade_eye.xml");
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-        });
+      if (!faceCascadeRef.current) faceCascadeRef.current = new cv.CascadeClassifier();
+      faceCascadeRef.current.load("haarcascade_frontalface_default.xml");
 
-        if (!isMountedRef.current) {
-          stream.getTracks().forEach((track) => track.stop());
-          return null;
-        }
+      if (!eyeCascadeRef.current) eyeCascadeRef.current = new cv.CascadeClassifier();
+      eyeCascadeRef.current.load("haarcascade_eye.xml");
+      console.log(`[AI Vision Profiler] Cascades loaded in ${Math.round(performance.now() - cascadeStart)}ms`);
 
-        streamRef.current = stream;
+      // Phase 3: Load Teachable Machine (Graceful fallback)
+      updateStatus("loading", "Step 3/3: Initializing posture model...");
+      try {
+        const tmStart = performance.now();
+        const modelURL = window.location.origin + "/models/model.json";
+        const metadataURL = window.location.origin + "/models/metadata.json";
+        const tmModel = await tmImage.load(modelURL, metadataURL);
+        tmModelRef.current = tmModel;
+        console.log(`[AI Vision Profiler] TM Posture model loaded in ${Math.round(performance.now() - tmStart)}ms`);
+      } catch (tmErr) {
+        console.warn("[FocusDetection] TM model load skipped, continuing with Haar Cascades:", tmErr);
+      }
 
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.play().catch((playErr) => {
-            console.warn("Video auto-play warning:", playErr);
-          });
-        }
-
-        return stream;
-      })();
-
-      // Wait for both models and camera to be ready
-      await Promise.all([modelsPromise, cameraPromise]);
+      // Success: Clear 15-second timeout and start detection loop
+      if (initTimeoutRef.current) {
+        clearTimeout(initTimeoutRef.current);
+        initTimeoutRef.current = null;
+      }
 
       if (isMountedRef.current) {
-        setFocusState((prev) => ({
-          ...prev,
-          status: "detecting",
-          loadingStage: undefined,
-        }));
+        isInitializedRef.current = true;
+        isInitializingRef.current = false;
+        console.log(
+          `[AI Vision Profiler] Total initialization successful in ${Math.round(performance.now() - initStart)}ms`
+        );
+        updateStatus("detecting");
         startDetectionLoop();
       }
     } catch (err: any) {
-      console.error("AI Vision initialization error:", err);
-      if (isMountedRef.current) {
-        let msg = err.message || "Failed to initialize camera and AI models.";
-        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-          msg = "Camera permission was not granted. Please click the camera/lock icon in your browser address bar, set Camera to 'Allow', and click Retry.";
-        } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
-          msg = "No webcam found. Please connect a camera to use AI Focus monitoring.";
-        } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
-          msg = "Webcam is already in use by another app (e.g. Zoom, Teams, or another browser window). Please close that app and click Retry.";
-        }
-        setFocusState({
-          isFocused: false,
-          confidence: 0,
-          status: "error",
-          error: msg,
-        });
+      if (initTimeoutRef.current) {
+        clearTimeout(initTimeoutRef.current);
+        initTimeoutRef.current = null;
       }
-    }
-  }, [loadOpenCv, startDetectionLoop]);
+      isInitializingRef.current = false;
+      stopVisionPipeline();
 
-  // 5. Mount effect
+      console.error("[FocusDetection] Initialization error:", err);
+      let msg = err.message || "Failed to initialize AI Vision engine.";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        msg = "Camera permission was denied. Please click the camera icon in your address bar, allow access, and try again.";
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        msg = "No webcam detected. Please connect a camera to use AI Focus monitoring.";
+      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+        msg = "Webcam is currently in use by another application. Please close Zoom/Teams and try again.";
+      }
+
+      updateStatus("error", undefined, msg);
+    }
+  }, [loadOpenCv, startDetectionLoop, stopVisionPipeline, updateStatus]);
+
+  // Cleanup strictly on unmount
   useEffect(() => {
     isMountedRef.current = true;
-    initPipeline();
-
     return () => {
       isMountedRef.current = false;
-      isDetectingRef.current = false;
-
-      // Stop camera stream tracks
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-
-      // Cancel loops
-      if (loopTimerRef.current) {
-        clearTimeout(loopTimerRef.current);
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-
-      // Stop sound alarm
-      stopContinuousAlarm();
-
-      // Free classifiers
-      try {
-        if (faceCascadeRef.current) {
-          faceCascadeRef.current.delete();
-          faceCascadeRef.current = null;
-        }
-        if (eyeCascadeRef.current) {
-          eyeCascadeRef.current.delete();
-          eyeCascadeRef.current = null;
-        }
-      } catch {
-        // Ignored
-      }
+      stopVisionPipeline();
     };
-  }, [initPipeline]);
+  }, [stopVisionPipeline]);
 
   return (
     <div className="space-y-4">
-      {/* Hidden canvas used for OpenCV frame reading */}
+      {/* Hidden processing canvas (fixed at 320x240) */}
       <canvas ref={canvasRef} className="hidden" />
 
-      {/* Video Container */}
-      <div className="relative rounded-xl overflow-hidden bg-black/60 aspect-video shadow-md border border-border/40">
+      {/* Main Video & Display Container */}
+      <div className="relative rounded-xl overflow-hidden bg-black/70 aspect-video shadow-md border border-border/40">
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
-          className="w-full h-full object-cover"
+          className={`w-full h-full object-cover ${focusState.status === "detecting" ? "block" : "hidden"}`}
           style={{ transform: "scaleX(-1)" }}
         />
 
-        {/* Live OpenCV Detection Status Overlay */}
-        {focusState.status === "detecting" && (
-          <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-2 text-xs border border-white/10 shadow-sm">
-            {eyesDetected ? (
-              <>
-                <Eye className="h-3.5 w-3.5 text-emerald-400" />
-                <span className="text-emerald-300 font-medium">Face & Eyes Detected</span>
-              </>
-            ) : faceDetected ? (
-              <>
-                <UserCheck className="h-3.5 w-3.5 text-amber-400" />
-                <span className="text-amber-300 font-medium">Face Detected (Eyes Unclear)</span>
-              </>
-            ) : (
-              <>
-                <UserX className="h-3.5 w-3.5 text-rose-400" />
-                <span className="text-rose-300 font-medium">No Face Detected</span>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Refocus Alarm Pulsing Badge */}
-        {alarmActive && (
-          <div className="absolute top-3 right-3 bg-rose-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse shadow-lg text-xs font-bold">
-            <Bell className="h-4 w-4 animate-bounce" />
-            <span>LOOK AT SCREEN!</span>
-          </div>
-        )}
-
-        {/* Progressive Loading Spinner Overlay */}
-        {focusState.status === "loading" && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-            <div className="text-center space-y-3 max-w-xs">
-              <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin" />
-              <p className="text-sm font-semibold text-white">Initializing AI Vision</p>
-              <p className="text-xs text-muted-foreground animate-pulse">
-                {focusState.loadingStage || "Loading OpenCV Haar Cascades..."}
+        {/* 1. IDLE STATE: Clean Placeholder with Explicit "Start AI Vision" Button */}
+        {focusState.status === "idle" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-black/80 via-black/60 to-black/80 p-6 text-center space-y-3">
+            <div className="p-3.5 rounded-full bg-primary/10 border border-primary/20 text-primary">
+              <Camera className="w-8 h-8" />
+            </div>
+            <div className="space-y-1 max-w-xs">
+              <p className="text-sm font-semibold text-white">AI Vision Monitor is Standby</p>
+              <p className="text-xs text-muted-foreground">
+                Activate webcam posture & eye tracking when ready. Focus timer runs independently.
               </p>
             </div>
+            <Button
+              onClick={startVisionPipeline}
+              size="sm"
+              className="gap-2 bg-primary hover:bg-primary/90 text-white font-medium shadow-md shadow-primary/20"
+            >
+              <Play className="w-4 h-4" />
+              Start AI Vision Monitor
+            </Button>
           </div>
+        )}
+
+        {/* 2. LOADING STATE: Progressive Status Spinner with Cancel Button */}
+        {focusState.status === "loading" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 backdrop-blur-sm p-6 text-center space-y-3">
+            <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin" />
+            <div className="space-y-1 max-w-xs">
+              <p className="text-sm font-semibold text-white">Initializing AI Vision Engine</p>
+              <p className="text-xs text-primary/80 animate-pulse font-mono">
+                {focusState.loadingStage || "Starting engine..."}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={stopVisionPipeline}
+              className="text-xs border-white/20 hover:bg-white/10 text-muted-foreground"
+            >
+              Cancel
+            </Button>
+          </div>
+        )}
+
+        {/* 3. DETECTING STATE: Live Overlays */}
+        {focusState.status === "detecting" && (
+          <>
+            {/* Live OpenCV Face & Eye Tracking Badge */}
+            <div className="absolute top-3 left-3 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-2 text-xs border border-white/15 shadow-sm">
+              {eyesDetected ? (
+                <>
+                  <Eye className="h-3.5 w-3.5 text-emerald-400" />
+                  <span className="text-emerald-300 font-medium">Face & Eyes Detected</span>
+                </>
+              ) : faceDetected ? (
+                <>
+                  <UserCheck className="h-3.5 w-3.5 text-amber-400" />
+                  <span className="text-amber-300 font-medium">Face Detected (Eyes Unclear)</span>
+                </>
+              ) : (
+                <>
+                  <UserX className="h-3.5 w-3.5 text-rose-400" />
+                  <span className="text-rose-300 font-medium">No Face Detected</span>
+                </>
+              )}
+            </div>
+
+            {/* Live Performance Profiler Pill */}
+            {perfStats.fps > 0 && (
+              <div className="absolute bottom-3 left-3 bg-black/75 backdrop-blur-md px-2.5 py-1 rounded-md flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground border border-white/10">
+                <Activity className="h-3 w-3 text-primary" />
+                <span>{perfStats.frameMs}ms</span>
+                <span>•</span>
+                <span>{perfStats.fps} FPS</span>
+              </div>
+            )}
+
+            {/* Refocus Alarm Pulsing Badge */}
+            {alarmActive && (
+              <div className="absolute top-3 right-3 bg-rose-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse shadow-lg text-xs font-bold">
+                <Bell className="h-4 w-4 animate-bounce" />
+                <span>LOOK AT SCREEN!</span>
+              </div>
+            )}
+          </>
         )}
       </div>
 
-      {/* Error State with Actionable Recovery */}
+      {/* ERROR STATE: Actionable Alert with Retry */}
       {focusState.status === "error" && (
         <Alert variant="destructive" className="bg-destructive/10 border-destructive/30">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle className="text-sm font-semibold">Camera / AI Monitor Issue</AlertTitle>
           <AlertDescription className="text-xs mt-1 flex flex-col gap-2">
             <span>{focusState.error}</span>
-            <div>
+            <div className="flex items-center gap-2 mt-1">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={initPipeline}
-                className="gap-1.5 text-xs h-7 mt-1 border-destructive/40 hover:bg-destructive/20"
+                onClick={startVisionPipeline}
+                className="gap-1.5 text-xs h-7 border-destructive/40 hover:bg-destructive/20"
               >
                 <RefreshCw className="w-3 h-3" />
-                Retry Camera & AI
+                Retry AI Vision
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={stopVisionPipeline}
+                className="text-xs h-7 text-muted-foreground hover:bg-destructive/10"
+              >
+                Dismiss
               </Button>
             </div>
           </AlertDescription>
         </Alert>
       )}
 
-      {/* Real-time Status Card */}
+      {/* DETECTING CONTROLS & STATUS CARD */}
       {focusState.status === "detecting" && (
         <div className="p-3.5 rounded-xl border border-border/50 bg-background/60 backdrop-blur-sm space-y-3">
           {alarmActive && (
@@ -545,6 +764,18 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
               </span>
               <p className="text-[10px] text-muted-foreground">Posture Confidence</p>
             </div>
+          </div>
+
+          <div className="pt-2 border-t border-border/40 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={stopVisionPipeline}
+              className="gap-1.5 text-xs h-7 border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
+            >
+              <CameraOff className="w-3.5 h-3.5" />
+              Stop AI Vision Monitor
+            </Button>
           </div>
         </div>
       )}

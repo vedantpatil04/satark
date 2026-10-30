@@ -60,6 +60,7 @@ export const StudentFocus: React.FC = () => {
   const [classrooms, setClassrooms] = useState<Classroom[]>([]);
   const [enableCamera, setEnableCamera] = useState(true);
   const [audioFeedback, setAudioFeedback] = useState(true);
+  const [visionStatus, setVisionStatus] = useState<"idle" | "loading" | "detecting" | "error">("idle");
 
   // Timer states
   const [timeRemainingSeconds, setTimeRemainingSeconds] = useState(25 * 60);
@@ -218,11 +219,11 @@ export const StudentFocus: React.FC = () => {
     }
   };
 
-  // Distraction event from vision detector
-  const handleDistractedTooLong = () => {
+  // Distraction event from vision detector (memoized to prevent child re-initialization)
+  const handleDistractedTooLong = React.useCallback(() => {
     setDistractionCount((prev) => prev + 1);
     toast.warning("Distraction detected! Bring your eyes back to your study material.");
-  };
+  }, []);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -365,9 +366,23 @@ export const StudentFocus: React.FC = () => {
                   <Camera className="w-4 h-4 text-primary" />
                   AI Vision Monitor
                 </CardTitle>
-                <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-400/30">
-                  Active
-                </Badge>
+                {visionStatus === "detecting" ? (
+                  <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-400/30 bg-emerald-500/10">
+                    Active
+                  </Badge>
+                ) : visionStatus === "loading" ? (
+                  <Badge variant="outline" className="text-[10px] text-amber-400 border-amber-400/30 bg-amber-500/10 animate-pulse">
+                    Starting...
+                  </Badge>
+                ) : visionStatus === "error" ? (
+                  <Badge variant="outline" className="text-[10px] text-rose-400 border-rose-400/30 bg-rose-500/10">
+                    Offline
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground border-border/40">
+                    Standby
+                  </Badge>
+                )}
               </div>
               <CardDescription className="text-xs">
                 Real-time head posture & gaze detection.
@@ -376,7 +391,10 @@ export const StudentFocus: React.FC = () => {
             <CardContent className="p-4 pt-0 flex-1 flex flex-col justify-center">
               {enableCamera ? (
                 <div className="rounded-xl overflow-hidden border border-border/40 bg-black/40">
-                  <FocusDetection onDistractedTooLong={handleDistractedTooLong} />
+                  <FocusDetection
+                    onDistractedTooLong={handleDistractedTooLong}
+                    onStatusChange={setVisionStatus}
+                  />
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center p-8 text-center text-muted-foreground space-y-2">
