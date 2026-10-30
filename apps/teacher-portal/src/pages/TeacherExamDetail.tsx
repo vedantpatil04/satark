@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { examsApi, ExamSession, ExamQuestion, ExamSubmission } from "@/api/exams";
 import { alertsApi, Alert } from "@/api/alerts";
 import { devicesApi, Device } from "@/api/devices";
@@ -22,7 +22,9 @@ import {
   Edit,
   Eye,
   HelpCircle,
-  Users
+  Users,
+  Radio,
+  Database
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -317,6 +319,12 @@ export const TeacherExamDetail: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            <Link to={`/teacher/exams/${exam.id}/live`}>
+              <Button className="font-bold gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm">
+                <Radio className="w-4 h-4 text-rose-500 animate-pulse" /> Live Monitoring
+              </Button>
+            </Link>
+
             {(exam.status === "draft" || exam.status === "scheduled") && (
               <Button onClick={handleStart} className="font-bold gap-1.5 bg-emerald-600 hover:bg-emerald-700">
                 <Play className="w-4 h-4" /> Start Exam
@@ -411,13 +419,24 @@ export const TeacherExamDetail: React.FC = () => {
                 )}
 
                 {isEditable && (
-                  <Button
-                    size="sm"
-                    onClick={handleOpenAddQuestion}
-                    className="text-xs font-semibold flex items-center gap-1.5"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Add Question
-                  </Button>
+                  <>
+                    <Link to="/teacher/question-bank">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs font-semibold flex items-center gap-1.5 border-primary/30 text-primary hover:bg-primary/10"
+                      >
+                        <Database className="w-3.5 h-3.5" /> Import from Bank
+                      </Button>
+                    </Link>
+                    <Button
+                      size="sm"
+                      onClick={handleOpenAddQuestion}
+                      className="text-xs font-semibold flex items-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Add Question
+                    </Button>
+                  </>
                 )}
               </div>
             </CardHeader>

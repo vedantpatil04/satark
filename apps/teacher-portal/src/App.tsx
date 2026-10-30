@@ -15,6 +15,8 @@ import { TeacherDevices } from "./pages/TeacherDevices";
 import { TeacherFocus } from "./pages/TeacherFocus";
 import { TeacherAlerts } from "./pages/TeacherAlerts";
 import { TeacherNotifications } from "./pages/TeacherNotifications";
+import { TeacherQuestionBank } from "./pages/TeacherQuestionBank";
+import { LiveMonitoring } from "./pages/exams/LiveMonitoring";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -53,8 +55,13 @@ const App: React.FC = () => (
 
                 <Route path="/exams" element={<TeacherExams />} />
                 <Route path="/exams/:id" element={<TeacherExamDetail />} />
+                <Route path="/exams/:id/live" element={<LiveMonitoring />} />
                 <Route path="/teacher/exams" element={<Navigate to="/exams" replace />} />
                 <Route path="/teacher/exams/:id" element={<TeacherExamDetail />} />
+                <Route path="/teacher/exams/:examId/live" element={<LiveMonitoring />} />
+
+                <Route path="/question-bank" element={<TeacherQuestionBank />} />
+                <Route path="/teacher/question-bank" element={<Navigate to="/question-bank" replace />} />
 
                 <Route path="/devices" element={<TeacherDevices />} />
                 <Route path="/teacher/devices" element={<Navigate to="/devices" replace />} />

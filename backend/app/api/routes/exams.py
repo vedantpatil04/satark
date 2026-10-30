@@ -7,14 +7,16 @@ from backend.app.core.database import get_db
 from backend.app.core.dependencies import get_current_user, require_teacher
 from backend.app.models import (
     User, Classroom, ClassroomEnrollment, ExamSession, DeviceSession, Device,
-    ExamQuestion, ExamSubmission, StudentAnswer, ActivityEvent
+    ExamQuestion, ExamSubmission, StudentAnswer, ActivityEvent,
+    QuestionBankItem, ExamQuestionSnapshot, ExamMediaSession
 )
 from backend.app.schemas import (
     ExamCreate, ExamResponse, ExamJoinRequest, ExamActionResponse,
     ExamGrantTimeRequest, ExamGrantTimeResponse,
     ExamQuestionCreate, ExamQuestionUpdate, ExamQuestionResponse,
     SaveAnswerRequest, StudentAnswerResponse, ExamSubmitRequest,
-    ExamSubmissionResponse, EventEnvelope
+    ExamSubmissionResponse, EventEnvelope,
+    ExamImportQuestionsFromBankRequest, ExamQuestionSnapshotResponse
 )
 from backend.app.services.audit_service import log_action
 from backend.app.services.event_service import ingest_event_envelope
@@ -190,12 +192,49 @@ async def start_exam(
     now = datetime.now(timezone.utc)
     exam.status = "active"
     exam.actual_start = now
+
+    # Preserve an immutable examination question snapshot before students access
+    existing_snap = db.query(ExamQuestionSnapshot).filter(ExamQuestionSnapshot.exam_id == exam.id).first()
+    if not existing_snap:
+        q_list = db.query(ExamQuestion).filter(ExamQuestion.exam_id == exam.id).order_by(ExamQuestion.order_num).all()
+        snap_items = [
+            {
+                "id": str(q.id),
+                "question_text": q.question_text,
+                "options": q.options,
+                "correct_option_index": q.correct_option_index,
+                "marks": q.marks,
+                "order_num": q.order_num
+            } for q in q_list
+        ]
+        db.add(ExamQuestionSnapshot(
+            exam_id=exam.id,
+            snapshot_data=snap_items,
+            total_questions=len(snap_items),
+            total_marks=sum(it["marks"] for it in snap_items),
+            created_at=now
+        ))
+
+    # Activate Media Monitoring Session
+    media_session = db.query(ExamMediaSession).filter(ExamMediaSession.exam_id == exam.id).first()
+    if not media_session:
+        db.add(ExamMediaSession(
+            exam_id=exam.id,
+            room_name=f"satark-exam-{exam.id}",
+            status="active",
+            created_at=now
+        ))
+    else:
+        media_session.status = "active"
+        media_session.closed_at = None
+
     db.commit()
 
     client_ip = request.client.host if request.client else None
     log_action(db, action="EXAM_STARTED", actor_user_id=current_user.id, target_resource=exam.id, ip_address=client_ip)
 
     await ws_manager.broadcast_to_teachers({"type": "exam_state_changed", "exam_id": exam.id, "status": "active"})
+    await ws_manager.broadcast_to_students({"type": "exam_state_changed", "exam_id": exam.id, "status": "active"})
     return ExamActionResponse(id=exam.id, status=exam.status, message="Exam session successfully activated")
 
 
@@ -270,12 +309,19 @@ async def end_exam(
     now = datetime.now(timezone.utc)
     exam.status = "ended"
     exam.actual_end = now
+
+    media_session = db.query(ExamMediaSession).filter(ExamMediaSession.exam_id == exam.id).first()
+    if media_session:
+        media_session.status = "ended"
+        media_session.closed_at = now
+
     db.commit()
 
     client_ip = request.client.host if request.client else None
     log_action(db, action="EXAM_ENDED", actor_user_id=current_user.id, target_resource=exam.id, ip_address=client_ip)
 
     await ws_manager.broadcast_to_teachers({"type": "exam_state_changed", "exam_id": exam.id, "status": "ended"})
+    await ws_manager.broadcast_to_students({"type": "exam_state_changed", "exam_id": exam.id, "status": "ended"})
     return ExamActionResponse(id=exam.id, status=exam.status, message="Exam session finalized and sealed")
 
 
@@ -493,6 +539,153 @@ def delete_exam_question(
     db.delete(question)
     db.commit()
     return {"message": "Question deleted successfully"}
+
+
+@router.post("/{exam_id}/import-from-bank", response_model=List[ExamQuestionResponse])
+def import_questions_from_bank(
+    exam_id: str,
+    req: ExamImportQuestionsFromBankRequest,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    """
+    Imports selected questions from Question Bank items into an examination as an independent snapshot copy.
+    """
+    exam = db.query(ExamSession).filter(ExamSession.id == exam_id).first()
+    if not exam or exam.teacher_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if exam.status not in ["draft", "scheduled"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot add questions when exam is in '{exam.status}' state."
+        )
+
+    # Get max current order_num
+    max_order = db.query(ExamQuestion.order_num).filter(ExamQuestion.exam_id == exam_id).order_by(ExamQuestion.order_num.desc()).first()
+    next_order = (max_order[0] + 1) if max_order else 1
+
+    bank_items = db.query(QuestionBankItem).filter(QuestionBankItem.id.in_(req.item_ids)).all()
+    if not bank_items:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No valid question bank items found")
+
+    new_questions = []
+    now = datetime.now(timezone.utc)
+    for it in bank_items:
+        q = ExamQuestion(
+            exam_id=exam.id,
+            question_text=it.question_text,
+            options=it.options,
+            correct_option_index=it.correct_option_index,
+            marks=it.marks,
+            order_num=next_order,
+            created_at=now,
+            updated_at=now
+        )
+        db.add(q)
+        new_questions.append(q)
+        next_order += 1
+
+    db.commit()
+    for q in new_questions:
+        db.refresh(q)
+
+    return new_questions
+
+
+@router.post("/{exam_id}/snapshot", response_model=ExamQuestionSnapshotResponse)
+def create_exam_snapshot(
+    exam_id: str,
+    current_user: User = Depends(require_teacher),
+    db: Session = Depends(get_db)
+):
+    """
+    Explicitly freezes or updates the immutable snapshot of examination questions.
+    """
+    exam = db.query(ExamSession).filter(ExamSession.id == exam_id).first()
+    if not exam or exam.teacher_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    q_list = db.query(ExamQuestion).filter(ExamQuestion.exam_id == exam.id).order_by(ExamQuestion.order_num).all()
+    now = datetime.now(timezone.utc)
+    snap_items = [
+        {
+            "id": str(q.id),
+            "question_text": q.question_text,
+            "options": q.options,
+            "correct_option_index": q.correct_option_index,
+            "marks": q.marks,
+            "order_num": q.order_num
+        } for q in q_list
+    ]
+
+    snap = db.query(ExamQuestionSnapshot).filter(ExamQuestionSnapshot.exam_id == exam.id).first()
+    if snap:
+        snap.snapshot_data = snap_items
+        snap.total_questions = len(snap_items)
+        snap.total_marks = sum(it["marks"] for it in snap_items)
+    else:
+        snap = ExamQuestionSnapshot(
+            exam_id=exam.id,
+            snapshot_data=snap_items,
+            total_questions=len(snap_items),
+            total_marks=sum(it["marks"] for it in snap_items),
+            created_at=now
+        )
+        db.add(snap)
+
+    db.commit()
+    db.refresh(snap)
+    return snap
+
+
+@router.get("/{exam_id}/snapshot", response_model=ExamQuestionSnapshotResponse)
+def get_exam_snapshot(
+    exam_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Retrieves the immutable snapshot of examination questions.
+    Students receive sanitized questions with correct answers withheld during active exams.
+    """
+    exam = db.query(ExamSession).filter(ExamSession.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found")
+
+    if current_user.role == "teacher":
+        if exam.teacher_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    else:
+        enrollment = db.query(ClassroomEnrollment).filter(
+            ClassroomEnrollment.classroom_id == exam.classroom_id,
+            ClassroomEnrollment.student_id == current_user.id
+        ).first()
+        if not enrollment:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled")
+
+    snap = db.query(ExamQuestionSnapshot).filter(ExamQuestionSnapshot.exam_id == exam.id).first()
+    if not snap:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not yet created")
+
+    if current_user.role == "student" and exam.status != "ended":
+        # Withhold correct answers from students
+        sanitized_items = []
+        for it in snap.snapshot_data:
+            sanitized_it = dict(it)
+            sanitized_it.pop("correct_option_index", None)
+            sanitized_items.append(sanitized_it)
+        return ExamQuestionSnapshotResponse(
+            id=snap.id,
+            exam_id=snap.exam_id,
+            total_questions=snap.total_questions,
+            total_marks=snap.total_marks,
+            snapshot_data=sanitized_items,
+            created_at=snap.created_at
+        )
+
+    return snap
+
 
 
 # ==========================================

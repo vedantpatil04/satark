@@ -1,3 +1,4 @@
+import json
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 from backend.app.models import AuditLog
@@ -19,6 +20,10 @@ def log_action(
     # Strip any accidental secrets
     for secret_key in ["password", "token", "secret", "hashed_password", "key"]:
         safe_details.pop(secret_key, None)
+
+    # Normalize any non-JSON native types (e.g. UUID, datetime) safely
+    if safe_details:
+        safe_details = json.loads(json.dumps(safe_details, default=str))
 
     audit_entry = AuditLog(
         actor_user_id=str(actor_user_id) if actor_user_id else None,

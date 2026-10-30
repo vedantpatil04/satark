@@ -201,3 +201,133 @@ export interface WebRTCMessage {
   payload: any;
 }
 
+// Question Bank & Dataset Types
+export interface QuestionBankItem {
+  id: string;
+  bank_id: string;
+  external_id?: string;
+  question_type: string;
+  question_text: string;
+  options: string[];
+  correct_option_index: number;
+  marks: number;
+  negative_marks: number;
+  difficulty: "easy" | "medium" | "hard";
+  topic?: string;
+  explanation?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QuestionBank {
+  id: string;
+  teacher_id: string;
+  title: string;
+  subject: string;
+  topic?: string;
+  description?: string;
+  item_count?: number;
+  total_marks?: number;
+  created_at: string;
+  updated_at: string;
+  items?: QuestionBankItem[];
+}
+
+export interface QuestionDatasetItem {
+  externalId: string;
+  type: "mcq";
+  question: string;
+  options: string[];
+  correctOptionIndex: number;
+  marks: number;
+  negativeMarks: number;
+  difficulty: "easy" | "medium" | "hard";
+  topic?: string;
+  explanation?: string;
+}
+
+export interface QuestionBankDataset {
+  schemaVersion: string;
+  title: string;
+  subject: string;
+  topic?: string;
+  description?: string;
+  questions: QuestionDatasetItem[];
+}
+
+export interface QuestionValidationSummary {
+  valid: boolean;
+  schema_version: string;
+  total_questions: number;
+  valid_count: number;
+  invalid_count: number;
+  valid_questions: any[];
+  errors: { index?: number; externalId?: string; field?: string; message: string }[];
+}
+
+export interface ExamQuestionSnapshot {
+  id: string;
+  exam_id: string;
+  total_questions: number;
+  total_marks: number;
+  snapshot_data: any[];
+  created_at: string;
+}
+
+// WebRTC Live Monitoring Types
+export interface LiveKitTokenResponse {
+  token: string;
+  url: string;
+  room_name: string;
+  identity: string;
+  participant_name: string;
+  role: string;
+  can_publish: boolean;
+  can_subscribe: boolean;
+  expires_in: number;
+  is_configured: boolean;
+}
+
+export interface StudentMonitoringCard {
+  student_id: string;
+  student_name: string;
+  email: string;
+  roll_number: string;
+  device_id?: string | null;
+  device_hostname?: string | null;
+  os_type: string;
+  os_version?: string | null;
+  connection_status: "connected" | "offline";
+  is_sharing_screen: boolean;
+  share_status: "not_started" | "pending" | "approved" | "sharing" | "stopped" | "rejected";
+  alert_count: number;
+  unacknowledged_alerts: number;
+  last_activity_at?: string | null;
+  recent_alerts: {
+    id: string;
+    alert_type: string;
+    severity: string;
+    description: string;
+    is_acknowledged: boolean;
+    created_at: string;
+  }[];
+}
+
+export interface MonitoringOverview {
+  exam_id: string;
+  title: string;
+  classroom_id: string;
+  exam_code: string;
+  status: string;
+  duration_minutes: number;
+  actual_start?: string | null;
+  room_name: string;
+  is_livekit_configured: boolean;
+  total_enrolled: number;
+  connected_count: number;
+  active_streamers: number;
+  total_alerts: number;
+  students: StudentMonitoringCard[];
+}
+
+

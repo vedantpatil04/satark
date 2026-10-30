@@ -1,6 +1,15 @@
+import uuid
 from typing import Optional
 from sqlalchemy.orm import Session
 from backend.app.models import ActivityEvent, Alert, Notification, ExamSession
+
+
+def _is_uuid(val: str) -> bool:
+    try:
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def evaluate_event_rules(db: Session, event: ActivityEvent) -> Optional[Alert]:
@@ -10,8 +19,10 @@ def evaluate_event_rules(db: Session, event: ActivityEvent) -> Optional[Alert]:
     - Focus Mode: Emits gentle, non-punitive focus reminders.
     """
     if event.mode == "exam":
+        if not _is_uuid(event.session_id):
+            return None
         # Look up active exam session
-        exam = db.query(ExamSession).filter(ExamSession.id == event.session_id).first()
+        exam = db.query(ExamSession).filter(ExamSession.id == str(event.session_id)).first()
         policy = exam.policy_config if exam and exam.policy_config else {}
 
         # Default rules if not explicitly set

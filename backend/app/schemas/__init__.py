@@ -413,3 +413,193 @@ class AuditLogResponse(BaseModel):
     timestamp: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==========================================
+# Question Bank & Dataset Schemas
+# ==========================================
+class QuestionBankItemCreate(BaseModel):
+    external_id: Optional[str] = None
+    question_type: Literal["mcq"] = "mcq"
+    question_text: str = Field(..., min_length=3)
+    options: List[str] = Field(..., min_length=2)
+    correct_option_index: int = Field(..., ge=0)
+    marks: int = Field(default=1, ge=1)
+    negative_marks: int = Field(default=0, ge=0)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    topic: Optional[str] = None
+    explanation: Optional[str] = None
+
+
+class QuestionBankItemUpdate(BaseModel):
+    external_id: Optional[str] = None
+    question_text: Optional[str] = None
+    options: Optional[List[str]] = None
+    correct_option_index: Optional[int] = None
+    marks: Optional[int] = None
+    negative_marks: Optional[int] = None
+    difficulty: Optional[Literal["easy", "medium", "hard"]] = None
+    topic: Optional[str] = None
+    explanation: Optional[str] = None
+
+
+class QuestionBankItemResponse(BaseModel):
+    id: ID
+    bank_id: ID
+    external_id: Optional[str] = None
+    question_type: str = "mcq"
+    question_text: str
+    options: List[str]
+    correct_option_index: int
+    marks: int
+    negative_marks: int
+    difficulty: str
+    topic: Optional[str] = None
+    explanation: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuestionBankCreate(BaseModel):
+    title: str = Field(..., min_length=2, max_length=150)
+    subject: str = Field(..., min_length=2, max_length=100)
+    topic: Optional[str] = None
+    description: Optional[str] = None
+
+
+class QuestionBankUpdate(BaseModel):
+    title: Optional[str] = None
+    subject: Optional[str] = None
+    topic: Optional[str] = None
+    description: Optional[str] = None
+
+
+class QuestionBankResponse(BaseModel):
+    id: ID
+    teacher_id: ID
+    title: str
+    subject: str
+    topic: Optional[str] = None
+    description: Optional[str] = None
+    item_count: Optional[int] = 0
+    total_marks: Optional[int] = 0
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuestionBankDetailResponse(QuestionBankResponse):
+    items: List[QuestionBankItemResponse] = Field(default_factory=list)
+
+
+# Canonical JSON format models
+class QuestionDatasetItem(BaseModel):
+    externalId: str = Field(..., min_length=1)
+    type: Literal["mcq"] = "mcq"
+    question: str = Field(..., min_length=2)
+    options: List[str] = Field(..., min_length=2)
+    correctOptionIndex: int = Field(..., ge=0)
+    marks: int = Field(default=1, ge=1)
+    negativeMarks: int = Field(default=0, ge=0)
+    difficulty: Literal["easy", "medium", "hard"] = "medium"
+    topic: Optional[str] = None
+    explanation: Optional[str] = None
+
+
+class QuestionBankDataset(BaseModel):
+    schemaVersion: str = "1.0"
+    title: str = Field(..., min_length=2)
+    subject: str = Field(..., min_length=2)
+    topic: Optional[str] = None
+    description: Optional[str] = None
+    questions: List[QuestionDatasetItem] = Field(..., min_length=1)
+
+
+class QuestionValidationSummary(BaseModel):
+    valid: bool
+    schema_version: str
+    total_questions: int
+    valid_count: int
+    invalid_count: int
+    valid_questions: List[Dict[str, Any]]
+    errors: List[Dict[str, Any]]
+
+
+class ImportDatasetRequest(BaseModel):
+    bank_id: Optional[str] = None
+    title: Optional[str] = None
+    subject: Optional[str] = None
+    topic: Optional[str] = None
+    description: Optional[str] = None
+    dataset: QuestionBankDataset
+
+
+# ==========================================
+# Exam Snapshot & Bank Selection Schemas
+# ==========================================
+class ExamImportQuestionsFromBankRequest(BaseModel):
+    item_ids: List[str] = Field(..., min_length=1)
+
+
+class ExamQuestionSnapshotResponse(BaseModel):
+    id: ID
+    exam_id: ID
+    total_questions: int
+    total_marks: int
+    snapshot_data: List[Dict[str, Any]]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ==========================================
+# LiveKit & WebRTC Media Monitoring Schemas
+# ==========================================
+class LiveKitTokenRequest(BaseModel):
+    can_publish: Optional[bool] = None
+    is_camera: Optional[bool] = False
+
+
+class LiveKitTokenResponse(BaseModel):
+    token: str
+    url: str
+    room_name: str
+    identity: str
+    participant_name: str
+    role: str
+    can_publish: bool
+    can_subscribe: bool
+    expires_in: int
+
+
+class MediaShareActionRequest(BaseModel):
+    student_id: Optional[str] = None
+    action: Literal["request", "approve", "reject", "start", "stop"]
+
+
+class MediaShareStatusResponse(BaseModel):
+    id: ID
+    exam_id: ID
+    student_id: ID
+    student_name: Optional[str] = None
+    teacher_id: ID
+    status: str
+    requested_at: datetime
+    responded_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MediaRoomOverviewResponse(BaseModel):
+    exam_id: ID
+    room_name: str
+    status: str
+    total_enrolled: int
+    connected_count: int
+    active_streamers: int
+    alert_count: int
+    students: List[Dict[str, Any]]
+

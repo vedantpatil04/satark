@@ -64,7 +64,7 @@ class ConnectionManager:
 
     async def broadcast_to_teachers(self, message: Dict[str, Any]):
         """Broadcasts payload to all connected teachers."""
-        payload = json.dumps(message)
+        payload = json.dumps(message, default=str)
         for user_id, sockets in list(self.teacher_connections.items()):
             for ws in sockets:
                 try:
@@ -74,7 +74,7 @@ class ConnectionManager:
 
     async def broadcast_to_students(self, message: Dict[str, Any]):
         """Broadcasts payload to all connected students."""
-        payload = json.dumps(message)
+        payload = json.dumps(message, default=str)
         for user_id, sockets in list(self.student_connections.items()):
             for ws in sockets:
                 try:
@@ -84,7 +84,7 @@ class ConnectionManager:
 
     async def send_to_student(self, student_id: str, message: Dict[str, Any]):
         """Sends payload to a specific student."""
-        payload = json.dumps(message)
+        payload = json.dumps(message, default=str)
         if student_id in self.student_connections:
             for ws in self.student_connections[student_id]:
                 try:
@@ -94,7 +94,7 @@ class ConnectionManager:
 
     async def send_to_teacher(self, teacher_id: str, message: Dict[str, Any]):
         """Sends payload to a specific teacher."""
-        payload = json.dumps(message)
+        payload = json.dumps(message, default=str)
         if teacher_id in self.teacher_connections:
             for ws in self.teacher_connections[teacher_id]:
                 try:
@@ -104,7 +104,7 @@ class ConnectionManager:
 
     async def send_to_agent(self, device_id: str, message: Dict[str, Any]):
         """Sends payload to a specific desktop agent."""
-        payload = json.dumps(message)
+        payload = json.dumps(message, default=str)
         if device_id in self.agent_connections:
             for ws in self.agent_connections[device_id]:
                 try:

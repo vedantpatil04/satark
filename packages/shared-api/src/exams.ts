@@ -167,6 +167,21 @@ export const examsApi = {
         body: JSON.stringify(payload),
       }
     ),
+
+  // Snapshot & Question Bank Import APIs
+  importFromBank: (examId: string, itemIds: string[]) =>
+    apiClient<ExamQuestion[]>(`/exams/${examId}/import-from-bank`, {
+      method: "POST",
+      body: JSON.stringify({ item_ids: itemIds }),
+    }),
+
+  createSnapshot: (examId: string) =>
+    apiClient<any>(`/exams/${examId}/snapshot`, {
+      method: "POST",
+    }),
+
+  getSnapshot: (examId: string) =>
+    apiClient<any>(`/exams/${examId}/snapshot`),
 };
 
 export type { ExamQuestion, StudentAnswer, ExamSubmission } from "@satark/shared-types";

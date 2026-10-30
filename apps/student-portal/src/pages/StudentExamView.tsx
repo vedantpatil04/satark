@@ -13,7 +13,8 @@ import {
   ChevronRight,
   Send,
   HelpCircle,
-  AlertCircle
+  AlertCircle,
+  Megaphone
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,14 @@ export const StudentExamView: React.FC = () => {
   const [showTabWarning, setShowTabWarning] = useState<boolean>(false);
   const lastTabSwitchTime = useRef<number>(0);
 
+  // Proctor Announcement State
+  const [announcement, setAnnouncement] = useState<{
+    message: string;
+    teacherName?: string;
+    priority: "normal" | "urgent";
+    timestamp: string;
+  } | null>(null);
+
   // Fetch initial exam, questions, existing answers & submission status
   const loadExamWorkspace = useCallback(async () => {
     if (!effectiveExamId) return;
@@ -91,7 +100,7 @@ export const StudentExamView: React.FC = () => {
     loadExamWorkspace();
   }, [loadExamWorkspace]);
 
-  // Real-time socket for proctor time extensions & WebRTC screen sharing signaling
+  // Real-time socket for proctor time extensions, announcements & WebRTC screen sharing signaling
   const { isConnected, lastMessage, send } = useRealtimeSocket({
     channel: "student",
     onMessage: (msg) => {
@@ -101,6 +110,18 @@ export const StudentExamView: React.FC = () => {
         toast.info(`Time Extended: Proctor granted +${addedMins} additional minutes!`, {
           duration: 6000,
         });
+      } else if (msg.type === "exam_announcement" && msg.exam_id === effectiveExamId) {
+        setAnnouncement({
+          message: msg.message,
+          teacherName: msg.teacher_name,
+          priority: msg.priority || "normal",
+          timestamp: msg.timestamp || new Date().toISOString(),
+        });
+        if (msg.priority === "urgent") {
+          toast.error(`URGENT ANNOUNCEMENT: ${msg.message}`, { duration: 10000 });
+        } else {
+          toast.info(`Instructor Announcement: ${msg.message}`, { duration: 8000 });
+        }
       }
     },
   });
@@ -115,6 +136,7 @@ export const StudentExamView: React.FC = () => {
     role: "student",
     sendMessage: send,
     lastMessage,
+    examId: effectiveExamId,
   });
 
   // Exam countdown timer
@@ -207,6 +229,10 @@ export const StudentExamView: React.FC = () => {
       const subRes = await examsApi.submitExam(effectiveExamId, {
         answers: payloadAnswers,
       });
+
+      if (isSharing) {
+        stopScreenShare();
+      }
 
       setSubmission(subRes);
       setSubmitDialogOpen(false);
@@ -326,6 +352,48 @@ export const StudentExamView: React.FC = () => {
           <Send className="w-4 h-4" /> Submit Exam
         </Button>
       </div>
+
+      {/* Teacher Proctor Announcement Banner */}
+      {announcement && (
+        <aside
+          aria-label="Proctor announcement"
+          className={`p-4 rounded-xl border flex items-start justify-between gap-3 text-xs shadow-md animate-in fade-in slide-in-from-top-2 duration-200 ${
+            announcement.priority === "urgent"
+              ? "bg-rose-500/15 border-rose-500/40 text-rose-600 dark:text-rose-400"
+              : "bg-blue-500/15 border-blue-500/40 text-blue-600 dark:text-blue-400"
+          }`}
+        >
+          <div className="flex items-start gap-2.5">
+            <Megaphone className="w-5 h-5 shrink-0 mt-0.5 animate-bounce" />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm">
+                  {announcement.priority === "urgent" ? "Urgent Proctor Announcement" : "Proctor Announcement"}
+                </span>
+                {announcement.teacherName && (
+                  <Badge variant="outline" className="text-[10px] uppercase font-semibold">
+                    From: {announcement.teacherName}
+                  </Badge>
+                )}
+                <span className="text-[10px] text-muted-foreground font-mono">
+                  {new Date(announcement.timestamp).toLocaleTimeString()}
+                </span>
+              </div>
+              <p className="text-foreground mt-1 text-sm font-medium leading-relaxed">
+                {announcement.message}
+              </p>
+            </div>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setAnnouncement(null)}
+            className="text-xs h-7 px-2 shrink-0 hover:bg-muted/50"
+          >
+            Dismiss
+          </Button>
+        </aside>
+      )}
 
       {/* Feature 2: Tab-Switch Warning Banner when triggered */}
       {showTabWarning && (

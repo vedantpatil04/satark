@@ -3,8 +3,33 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Column, String, Integer, Boolean, DateTime, Text, JSON, ForeignKey, UniqueConstraint, Index
 )
+from sqlalchemy.types import TypeDecorator, CHAR
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 from backend.app.core.database import Base
+
+
+class GUID(TypeDecorator):
+    """Platform-independent GUID type.
+    Uses PostgreSQL's UUID type, otherwise uses CHAR(36).
+    """
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(PG_UUID(as_uuid=False))
+        return dialect.type_descriptor(CHAR(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        return str(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        return str(value)
 
 
 def generate_uuid() -> str:
@@ -35,6 +60,7 @@ class User(Base):
     proctored_exams = relationship("ExamSession", back_populates="teacher", foreign_keys="ExamSession.teacher_id")
     focus_sessions = relationship("FocusSession", back_populates="student", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    question_banks = relationship("QuestionBank", back_populates="teacher", cascade="all, delete-orphan")
 
 
 class StudentProfile(Base):
@@ -142,6 +168,10 @@ class ExamSession(Base):
     alerts = relationship("Alert", back_populates="exam", cascade="all, delete-orphan")
     questions = relationship("ExamQuestion", back_populates="exam", cascade="all, delete-orphan", order_by="ExamQuestion.order_num")
     submissions = relationship("ExamSubmission", back_populates="exam", cascade="all, delete-orphan")
+    snapshots = relationship("ExamQuestionSnapshot", back_populates="exam", cascade="all, delete-orphan")
+    media_session = relationship("ExamMediaSession", back_populates="exam", uselist=False, cascade="all, delete-orphan")
+    media_requests = relationship("MediaShareRequest", back_populates="exam", cascade="all, delete-orphan")
+    media_participants = relationship("MediaSessionParticipant", back_populates="exam", cascade="all, delete-orphan")
 
 
 class FocusSession(Base):
@@ -296,5 +326,102 @@ class StudentAnswer(Base):
     submission = relationship("ExamSubmission", back_populates="answers")
     student = relationship("User")
     exam = relationship("ExamSession")
+
+
+class QuestionBank(Base):
+    __tablename__ = "question_banks"
+
+    id = Column(GUID(), primary_key=True, default=generate_uuid)
+    teacher_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(150), nullable=False)
+    subject = Column(String(100), nullable=False, index=True)
+    topic = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    teacher = relationship("User", back_populates="question_banks")
+    items = relationship("QuestionBankItem", back_populates="bank", cascade="all, delete-orphan", order_by="QuestionBankItem.created_at")
+
+
+class QuestionBankItem(Base):
+    __tablename__ = "question_bank_items"
+
+    id = Column(GUID(), primary_key=True, default=generate_uuid)
+    bank_id = Column(GUID(), ForeignKey("question_banks.id", ondelete="CASCADE"), nullable=False, index=True)
+    external_id = Column(String(50), nullable=True, index=True)
+    question_type = Column(String(20), default="mcq", nullable=False)
+    question_text = Column(Text, nullable=False)
+    options = Column(JSON, nullable=False)  # List[str]
+    correct_option_index = Column(Integer, nullable=False)
+    marks = Column(Integer, default=1, nullable=False)
+    negative_marks = Column(Integer, default=0, nullable=False)
+    difficulty = Column(String(20), default="medium", nullable=False)  # 'easy', 'medium', 'hard'
+    topic = Column(String(100), nullable=True)
+    explanation = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    bank = relationship("QuestionBank", back_populates="items")
+
+
+class ExamQuestionSnapshot(Base):
+    __tablename__ = "exam_question_snapshots"
+
+    id = Column(GUID(), primary_key=True, default=generate_uuid)
+    exam_id = Column(GUID(), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    snapshot_data = Column(JSON, nullable=False)  # List of serialized questions with answers, order, marks
+    total_questions = Column(Integer, nullable=False, default=0)
+    total_marks = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+
+    exam = relationship("ExamSession", back_populates="snapshots")
+
+
+class ExamMediaSession(Base):
+    __tablename__ = "exam_media_sessions"
+
+    id = Column(GUID(), primary_key=True, default=generate_uuid)
+    exam_id = Column(GUID(), ForeignKey("exam_sessions.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    room_name = Column(String(100), unique=True, nullable=False, index=True)
+    status = Column(String(20), default="active", nullable=False)  # 'active', 'ended'
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+
+    exam = relationship("ExamSession", back_populates="media_session")
+
+
+class MediaShareRequest(Base):
+    __tablename__ = "media_share_requests"
+
+    id = Column(GUID(), primary_key=True, default=generate_uuid)
+    exam_id = Column(GUID(), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(20), default="pending", nullable=False)  # 'pending', 'approved', 'rejected', 'sharing', 'stopped'
+    requested_at = Column(DateTime, default=utc_now, nullable=False)
+    responded_at = Column(DateTime, nullable=True)
+
+    exam = relationship("ExamSession", back_populates="media_requests")
+    student = relationship("User", foreign_keys=[student_id])
+    teacher = relationship("User", foreign_keys=[teacher_id])
+
+
+class MediaSessionParticipant(Base):
+    __tablename__ = "media_session_participants"
+
+    id = Column(GUID(), primary_key=True, default=generate_uuid)
+    exam_id = Column(GUID(), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(20), nullable=False)  # 'teacher', 'student'
+    is_sharing_screen = Column(Boolean, default=False, nullable=False)
+    is_camera_on = Column(Boolean, default=False, nullable=False)
+    connection_status = Column(String(20), default="connected", nullable=False)  # 'connected', 'disconnected'
+    joined_at = Column(DateTime, default=utc_now, nullable=False)
+    left_at = Column(DateTime, nullable=True)
+
+    exam = relationship("ExamSession", back_populates="media_participants")
+    user = relationship("User", foreign_keys=[user_id])
+
 
 

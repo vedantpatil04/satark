@@ -6,4 +6,6 @@ export * from "./devices";
 export * from "./focus";
 export * from "./alerts";
 export * from "./notifications";
+export * from "./questionBanks";
+export * from "./media";
 

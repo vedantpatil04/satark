@@ -1,21 +1,26 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { toast } from "sonner";
+import { Room, Track } from "livekit-client";
+import { mediaApi } from "@satark/shared-api";
 
 interface UseWebRTCStreamOptions {
   role: "teacher" | "student";
   sendMessage: (msg: any) => void;
   lastMessage?: any;
+  examId?: string;
 }
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
 ];
 
-export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStreamOptions) {
+export function useWebRTCStream({ role, sendMessage, lastMessage, examId }: UseWebRTCStreamOptions) {
   // State for student: pending share request from a teacher
   const [incomingRequest, setIncomingRequest] = useState<{
     teacher_id: string;
     exam_id?: string;
+    teacher_name?: string;
+    exam_title?: string;
   } | null>(null);
 
   // Active sharing state
@@ -26,9 +31,18 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const livekitRoomRef = useRef<Room | null>(null);
 
-  // Clean up peer connection & media tracks
+  // Clean up peer connection, LiveKit room & media tracks
   const cleanup = useCallback(() => {
+    if (livekitRoomRef.current) {
+      try {
+        livekitRoomRef.current.disconnect();
+      } catch (e) {
+        console.warn("Error disconnecting LiveKit room:", e);
+      }
+      livekitRoomRef.current = null;
+    }
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
@@ -44,9 +58,9 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
     setIncomingRequest(null);
   }, []);
 
-  // Initialize RTCPeerConnection
+  // Initialize RTCPeerConnection (P2P fallback)
   const createPeerConnection = useCallback(
-    (targetUserId: string, examId?: string) => {
+    (targetUserId: string, targetExamId?: string) => {
       if (pcRef.current) {
         pcRef.current.close();
       }
@@ -60,7 +74,7 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
             type: "ice_candidate",
             target_user_id: targetUserId,
             candidate: event.candidate,
-            exam_id: examId,
+            exam_id: targetExamId,
           });
         }
       };
@@ -88,11 +102,12 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
 
   // --- Student Actions ---
   const acceptScreenShare = useCallback(async () => {
-    if (!incomingRequest) return;
-    const { teacher_id, exam_id } = incomingRequest;
+    if (!incomingRequest && !examId) return;
+    const teacher_id = incomingRequest?.teacher_id || "";
+    const activeExamId = incomingRequest?.exam_id || examId;
 
     try {
-      // 1. Prompt browser display media
+      // 1. Explicitly prompt browser display media selection
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { displaySurface: "monitor" },
         audio: false,
@@ -100,35 +115,71 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
 
       localStreamRef.current = stream;
       setIsSharing(true);
-      setActivePeerId(teacher_id);
+      if (teacher_id) setActivePeerId(teacher_id);
       setIncomingRequest(null);
 
       // Handle user clicking native browser "Stop sharing" bar
       stream.getVideoTracks()[0].onended = () => {
-        stopScreenShare(teacher_id, exam_id);
+        stopScreenShare(teacher_id, activeExamId);
       };
 
-      // 2. Establish peer connection & add tracks
-      const pc = createPeerConnection(teacher_id, exam_id);
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      // 2. Notify backend of consent approval
+      if (activeExamId) {
+        await mediaApi.respondToShare(activeExamId, true).catch((e) => {
+          console.warn("Failed to record share response in backend:", e);
+        });
+      }
 
-      // 3. Notify teacher that request was accepted
-      sendMessage({
-        type: "screen_share_accepted",
-        teacher_id,
-        exam_id,
-      });
+      // 3. Connect to LiveKit SFU room if configured
+      if (activeExamId) {
+        try {
+          const tokenResp = await mediaApi.getToken(activeExamId, { can_publish: true });
+          if (tokenResp.is_configured && tokenResp.url && tokenResp.token) {
+            const room = new Room({
+              adaptiveStream: true,
+              dynacast: true,
+            });
+            livekitRoomRef.current = room;
+            await room.connect(tokenResp.url, tokenResp.token);
+            const videoTrack = stream.getVideoTracks()[0];
+            if (videoTrack) {
+              await room.localParticipant.publishTrack(videoTrack, {
+                name: "student_screen",
+                source: Track.Source.ScreenShare,
+              });
+            }
+          }
+        } catch (lkErr) {
+          console.warn("LiveKit publisher connection attempt notice:", lkErr);
+        }
 
-      // 4. Create and send WebRTC Offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+        // 4. Update server stream state so teacher live grid reflects active sharing
+        await mediaApi.updateStreamState(activeExamId, true).catch((e) => {
+          console.warn("Failed to update stream state:", e);
+        });
+      }
 
-      sendMessage({
-        type: "webrtc_offer",
-        target_user_id: teacher_id,
-        sdp: offer,
-        exam_id,
-      });
+      // 5. Establish P2P fallback signaling if teacher_id present
+      if (teacher_id) {
+        const pc = createPeerConnection(teacher_id, activeExamId);
+        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+
+        sendMessage({
+          type: "screen_share_accepted",
+          teacher_id,
+          exam_id: activeExamId,
+        });
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        sendMessage({
+          type: "webrtc_offer",
+          target_user_id: teacher_id,
+          sdp: offer,
+          exam_id: activeExamId,
+        });
+      }
 
       toast.success("Screen sharing active. Proctor is now viewing your display.");
     } catch (err: any) {
@@ -136,48 +187,58 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
       toast.error(err.name === "NotAllowedError" ? "Screen share permission was declined." : "Could not start screen sharing.");
       rejectScreenShare();
     }
-  }, [incomingRequest, createPeerConnection, sendMessage]);
+  }, [incomingRequest, examId, createPeerConnection, sendMessage]);
 
   const rejectScreenShare = useCallback(() => {
+    const activeExamId = incomingRequest?.exam_id || examId;
+    if (activeExamId) {
+      mediaApi.respondToShare(activeExamId, false, "Declined by student").catch(() => {});
+    }
     if (incomingRequest) {
       sendMessage({
         type: "screen_share_rejected",
         teacher_id: incomingRequest.teacher_id,
-        exam_id: incomingRequest.exam_id,
+        exam_id: activeExamId,
       });
       setIncomingRequest(null);
       toast.info("Screen share request declined.");
     }
-  }, [incomingRequest, sendMessage]);
+  }, [incomingRequest, examId, sendMessage]);
 
   const stopScreenShare = useCallback(
-    (targetUserId?: string, examId?: string) => {
+    (targetUserId?: string, targetExamId?: string) => {
       const target = targetUserId || activePeerId;
+      const effectiveExam = targetExamId || examId || incomingRequest?.exam_id;
+
+      if (effectiveExam) {
+        mediaApi.updateStreamState(effectiveExam, false).catch(() => {});
+      }
+
       if (target) {
         sendMessage({
           type: "screen_share_stopped",
           target_user_id: target,
-          exam_id: examId,
+          exam_id: effectiveExam,
         });
       }
       cleanup();
       toast.info("Screen sharing ended.");
     },
-    [activePeerId, sendMessage, cleanup]
+    [activePeerId, examId, incomingRequest, sendMessage, cleanup]
   );
 
   // --- Teacher Actions ---
   const requestScreenShare = useCallback(
-    (studentId: string, examId?: string) => {
+    (studentId: string, targetExamId?: string) => {
       setActivePeerId(studentId);
       sendMessage({
         type: "screen_share_request",
         student_id: studentId,
-        exam_id: examId,
+        exam_id: targetExamId || examId,
       });
       toast.info("Sent screen share request to student. Awaiting authorization...");
     },
-    [sendMessage]
+    [sendMessage, examId]
   );
 
   // --- WebSocket Signaling Message Dispatcher ---
@@ -192,6 +253,8 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
           setIncomingRequest({
             teacher_id: msg.teacher_id,
             exam_id: msg.exam_id,
+            teacher_name: msg.teacher_name,
+            exam_title: msg.exam_title,
           });
         } else if (msg.type === "webrtc_answer" && pcRef.current) {
           try {
@@ -269,4 +332,3 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
     requestScreenShare,
   };
 }
-

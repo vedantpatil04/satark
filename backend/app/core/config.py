@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     WEBRTC_TURN_USERNAME: Union[str, None] = None
     WEBRTC_TURN_CREDENTIAL: Union[str, None] = None
 
+    # LiveKit WebRTC SFU Media Server Configuration
+    LIVEKIT_URL: Union[str, None] = None
+    LIVEKIT_API_KEY: Union[str, None] = None
+    LIVEKIT_API_SECRET: Union[str, None] = None
+
     # CORS
     CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:5173",
