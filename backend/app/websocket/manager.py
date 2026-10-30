@@ -92,6 +92,16 @@ class ConnectionManager:
                 except Exception:
                     pass
 
+    async def send_to_teacher(self, teacher_id: str, message: Dict[str, Any]):
+        """Sends payload to a specific teacher."""
+        payload = json.dumps(message)
+        if teacher_id in self.teacher_connections:
+            for ws in self.teacher_connections[teacher_id]:
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    pass
+
     async def send_to_agent(self, device_id: str, message: Dict[str, Any]):
         """Sends payload to a specific desktop agent."""
         payload = json.dumps(message)

@@ -28,6 +28,8 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useRealtimeSocket } from "@/hooks/useRealtimeSocket";
+import { useWebRTCStream } from "@/hooks/useWebRTCStream";
+import { StudentScreenShareModal } from "@/components/webrtc/StudentScreenShareModal";
 
 export const StudentExamView: React.FC = () => {
   const { id, examId } = useParams<{ id?: string; examId?: string }>();
@@ -89,8 +91,8 @@ export const StudentExamView: React.FC = () => {
     loadExamWorkspace();
   }, [loadExamWorkspace]);
 
-  // Real-time socket for proctor time extensions
-  useRealtimeSocket({
+  // Real-time socket for proctor time extensions & WebRTC screen sharing signaling
+  const { isConnected, lastMessage, send } = useRealtimeSocket({
     channel: "student",
     onMessage: (msg) => {
       if (msg.type === "exam_time_granted" && msg.exam_id === effectiveExamId) {
@@ -101,6 +103,18 @@ export const StudentExamView: React.FC = () => {
         });
       }
     },
+  });
+
+  const {
+    incomingRequest,
+    isSharing,
+    acceptScreenShare,
+    rejectScreenShare,
+    stopScreenShare,
+  } = useWebRTCStream({
+    role: "student",
+    sendMessage: send,
+    lastMessage,
   });
 
   // Exam countdown timer
@@ -568,6 +582,15 @@ export const StudentExamView: React.FC = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* WebRTC Live Screen Sharing Consent & Indicator */}
+      <StudentScreenShareModal
+        incomingRequest={incomingRequest}
+        isSharing={isSharing}
+        onAccept={acceptScreenShare}
+        onReject={rejectScreenShare}
+        onStop={() => stopScreenShare()}
+      />
     </div>
   );
 };

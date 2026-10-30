@@ -65,6 +65,8 @@ ENV/
 *.sqlite
 *.sqlite3
 *.db
+*.db.*
+*.db.backup*
 
 # Misc
 *.swp

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import { UserResponse, authApi } from "@/api/auth";
+import { supabase, SUPABASE_PUBLISHABLE_KEY } from "@/lib/supabase";
 
 interface AuthContextType {
   user: UserResponse | null;
@@ -7,7 +8,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (token: string, user: UserResponse) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
 
@@ -40,7 +41,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    // 1. Initial user refresh
     refreshUser();
+
+    // 2. Set up Supabase Auth Listener if publishable key is present
+    if (SUPABASE_PUBLISHABLE_KEY) {
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (session?.access_token) {
+          localStorage.setItem("auth_token", session.access_token);
+          setToken(session.access_token);
+          try {
+            const userData = await authApi.getMe();
+            setUser(userData);
+          } catch (e) {
+            console.warn("Could not fetch server profile for Supabase user:", e);
+          }
+        } else if (event === "SIGNED_OUT") {
+          localStorage.removeItem("auth_token");
+          setToken(null);
+          setUser(null);
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
   }, []);
 
   const login = (newToken: string, newUser: UserResponse) => {
@@ -49,10 +77,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(newUser);
   };
 
-  const logout = () => {
-    localStorage.removeItem("auth_token");
-    setToken(null);
-    setUser(null);
+  const logout = async () => {
+    try {
+      if (SUPABASE_PUBLISHABLE_KEY) {
+        await supabase.auth.signOut();
+      }
+    } catch (e) {
+      console.warn("Supabase sign out error:", e);
+    } finally {
+      localStorage.removeItem("auth_token");
+      setToken(null);
+      setUser(null);
+    }
   };
 
   return (

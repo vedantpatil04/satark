@@ -4,7 +4,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, status
 from backend.app.core.security import verify_and_consume_ws_ticket
 from backend.app.websocket.manager import ws_manager
 from backend.app.core.database import SessionLocal
-from backend.app.models import Device
+from backend.app.models import Device, AuditLog
 from backend.app.schemas import EventEnvelope
 from backend.app.services.event_service import ingest_event_envelope
 
@@ -32,6 +32,24 @@ async def websocket_teacher_endpoint(
                 msg_type = data.get("type")
                 if msg_type == "ping":
                     await websocket.send_text(json.dumps({"type": "pong", "time": datetime.now(timezone.utc).isoformat()}))
+                elif msg_type in ("screen_share_request", "webrtc_offer", "ice_candidate", "screen_share_stopped"):
+                    # WebRTC Signaling from Teacher to Student
+                    target_student = data.get("student_id") or data.get("target_user_id")
+                    if target_student:
+                        data["teacher_id"] = user_id
+                        await ws_manager.send_to_student(target_student, data)
+                        if msg_type in ("screen_share_request", "screen_share_stopped"):
+                            db = SessionLocal()
+                            try:
+                                db.add(AuditLog(
+                                    actor_user_id=user_id,
+                                    action=f"SCREEN_SHARE_{msg_type.replace('screen_share_', '').upper()}",
+                                    target_resource=target_student,
+                                    details={"by": "teacher", "exam_id": data.get("exam_id")}
+                                ))
+                                db.commit()
+                            finally:
+                                db.close()
             except Exception:
                 pass
     except WebSocketDisconnect:
@@ -57,6 +75,24 @@ async def websocket_student_endpoint(
                 data = json.loads(raw_text)
                 if data.get("type") == "ping":
                     await websocket.send_text(json.dumps({"type": "pong", "time": datetime.now(timezone.utc).isoformat()}))
+                elif data.get("type") in ("screen_share_accepted", "screen_share_rejected", "screen_share_stopped", "webrtc_answer", "ice_candidate"):
+                    # WebRTC Signaling from Student to Teacher
+                    target_teacher = data.get("teacher_id") or data.get("target_user_id")
+                    if target_teacher:
+                        data["student_id"] = user_id
+                        await ws_manager.send_to_teacher(target_teacher, data)
+                        if data.get("type") in ("screen_share_accepted", "screen_share_rejected", "screen_share_stopped"):
+                            db = SessionLocal()
+                            try:
+                                db.add(AuditLog(
+                                    actor_user_id=user_id,
+                                    action=f"SCREEN_SHARE_{data.get('type').replace('screen_share_', '').upper()}",
+                                    target_resource=target_teacher,
+                                    details={"by": "student", "exam_id": data.get("exam_id")}
+                                ))
+                                db.commit()
+                            finally:
+                                db.close()
             except Exception:
                 pass
     except WebSocketDisconnect:

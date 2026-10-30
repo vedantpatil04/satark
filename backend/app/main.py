@@ -15,6 +15,7 @@ from backend.app.api.routes.alerts import router as alerts_router
 from backend.app.api.routes.notifications import router as notifications_router
 from backend.app.api.routes.audit import router as audit_router
 from backend.app.api.routes.reports import router as reports_router
+from backend.app.api.routes.evidence import router as evidence_router
 from backend.app.websocket.routes import router as ws_router
 
 
@@ -84,6 +85,7 @@ app.include_router(alerts_router, prefix=api_v1_prefix)
 app.include_router(notifications_router, prefix=api_v1_prefix)
 app.include_router(audit_router, prefix=api_v1_prefix)
 app.include_router(reports_router, prefix=api_v1_prefix)
+app.include_router(evidence_router, prefix=api_v1_prefix)
 
 # Mount Real-Time WebSocket Routes
 app.include_router(ws_router)

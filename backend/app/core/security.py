@@ -1,10 +1,21 @@
 import time
 import secrets
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 import jwt
+from jwt import PyJWKClient
 import bcrypt
 from backend.app.core.config import settings
+
+logger = logging.getLogger("security")
+
+# Supabase Asymmetric JWKS Client
+try:
+    _supabase_jwks_client = PyJWKClient(settings.SUPABASE_JWKS_URL)
+except Exception as e:
+    logger.warning(f"Could not initialize Supabase JWKS client: {e}")
+    _supabase_jwks_client = None
 
 # In-memory single-use WebSocket ticket storage: { ticket: { user_id, role, channel, expires_at } }
 _ws_ticket_store: Dict[str, Dict[str, Any]] = {}
@@ -104,7 +115,51 @@ def create_access_token(subject: str, role: str, extra_data: Optional[Dict[str, 
     return encoded_jwt
 
 
+def decode_supabase_jwks_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Validates asymmetric ES256/RS256 JWT tokens issued by Supabase Auth using live JWKS.
+    """
+    if not _supabase_jwks_client:
+        return None
+    try:
+        header = jwt.get_unverified_header(token)
+        # If token was signed with Supabase JWKS (ES256/RS256 with kid)
+        if header.get("kid") or header.get("alg") in ("ES256", "RS256"):
+            signing_key = _supabase_jwks_client.get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["ES256", "RS256"],
+                audience="authenticated",
+                options={"verify_exp": True}
+            )
+            # Map Supabase claims
+            user_metadata = payload.get("user_metadata", {})
+            return {
+                "sub": payload.get("sub"),
+                "email": payload.get("email"),
+                "role": user_metadata.get("role", "student"),
+                "full_name": user_metadata.get("full_name") or user_metadata.get("name") or payload.get("email"),
+                "is_supabase": True,
+                "aud": payload.get("aud")
+            }
+    except Exception as e:
+        logger.debug(f"Supabase JWKS token decode skipped/failed: {e}")
+    return None
+
+
 def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Decodes tokens:
+    1. First checks Supabase Auth asymmetric JWKS (ES256/RS256).
+    2. Falls back to device agent scoped HMAC tokens and local auth tokens.
+    """
+    # 1. Try Supabase JWKS token
+    supabase_payload = decode_supabase_jwks_token(token)
+    if supabase_payload:
+        return supabase_payload
+
+    # 2. Fall back to local HMAC / Device agent token
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload

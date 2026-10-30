@@ -33,6 +33,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { useRealtimeSocket } from "@/hooks/useRealtimeSocket";
+import { useWebRTCStream } from "@/hooks/useWebRTCStream";
+import { TeacherScreenViewerModal } from "@/components/webrtc/TeacherScreenViewerModal";
 
 export const TeacherExamDetail: React.FC = () => {
   const { id, examId } = useParams<{ id?: string; examId?: string }>();
@@ -48,6 +51,23 @@ export const TeacherExamDetail: React.FC = () => {
 
   // Question Form State
   const [qDialogOpen, setQDialogOpen] = useState(false);
+
+  // WebRTC Live Screen Viewer State
+  const { isConnected, lastMessage, send } = useRealtimeSocket({
+    channel: "teacher",
+  });
+
+  const {
+    isViewing,
+    remoteStream,
+    activePeerId,
+    requestScreenShare,
+    stopScreenShare,
+  } = useWebRTCStream({
+    role: "teacher",
+    sendMessage: send,
+    lastMessage,
+  });
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [qText, setQText] = useState("");
   const [qOptionA, setQOptionA] = useState("");
@@ -511,6 +531,7 @@ export const TeacherExamDetail: React.FC = () => {
                         <th className="pb-3">Score</th>
                         <th className="pb-3">Percentage</th>
                         <th className="pb-3">Submitted At</th>
+                        <th className="pb-3 text-right pr-2">Proctor Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/30">
@@ -534,6 +555,16 @@ export const TeacherExamDetail: React.FC = () => {
                           </td>
                           <td className="py-3 text-muted-foreground">
                             {new Date(s.submitted_at).toLocaleTimeString()}
+                          </td>
+                          <td className="py-3 text-right pr-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => requestScreenShare(s.student_id, exam?.id)}
+                              className="h-7 text-[11px] font-semibold gap-1 hover:bg-primary/10 hover:text-primary"
+                            >
+                              <Monitor className="w-3.5 h-3.5" /> Request Screen
+                            </Button>
                           </td>
                         </tr>
                       ))}
@@ -600,16 +631,28 @@ export const TeacherExamDetail: React.FC = () => {
                       </div>
                     </div>
 
-                    {!alt.is_acknowledged && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleAcknowledge(alt.id)}
-                        className="text-xs font-semibold shrink-0"
-                      >
-                        Acknowledge Alert
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {alt.student_id && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => requestScreenShare(alt.student_id!, exam?.id)}
+                          className="text-xs font-semibold gap-1 hover:bg-primary hover:text-primary-foreground"
+                        >
+                          <Monitor className="w-3.5 h-3.5" /> View Screen
+                        </Button>
+                      )}
+                      {!alt.is_acknowledged && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleAcknowledge(alt.id)}
+                          className="text-xs font-semibold shrink-0"
+                        >
+                          Acknowledge Alert
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))
               )}
@@ -817,6 +860,14 @@ export const TeacherExamDetail: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* WebRTC Candidate Screen Viewer Modal */}
+      <TeacherScreenViewerModal
+        isOpen={isViewing || !!remoteStream}
+        studentId={activePeerId}
+        remoteStream={remoteStream}
+        onClose={() => stopScreenShare()}
+      />
     </div>
   );
 };

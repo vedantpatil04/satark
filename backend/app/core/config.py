@@ -35,6 +35,22 @@ class Settings(BaseSettings):
     # Supported Roles: strictly 'teacher' and 'student'
     VALID_ROLES: List[str] = ["teacher", "student"]
 
+    # Supabase Cloud Configuration
+    SUPABASE_URL: str = "https://ugsizlimcnxtbzkwficf.supabase.co"
+    SUPABASE_SECRET_KEY: Union[str, None] = None
+    SUPABASE_JWKS_URL: str = "https://ugsizlimcnxtbzkwficf.supabase.co/auth/v1/.well-known/jwks.json"
+
+    # Cloudinary Evidence Storage Configuration
+    CLOUDINARY_CLOUD_NAME: Union[str, None] = None
+    CLOUDINARY_API_KEY: Union[str, None] = None
+    CLOUDINARY_API_SECRET: Union[str, None] = None
+
+    # WebRTC STUN/TURN Configuration
+    WEBRTC_STUN_URLS: List[str] = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
+    WEBRTC_TURN_URL: Union[str, None] = None
+    WEBRTC_TURN_USERNAME: Union[str, None] = None
+    WEBRTC_TURN_CREDENTIAL: Union[str, None] = None
+
     # CORS
     CORS_ORIGINS: Union[List[str], str] = [
         "http://localhost:5173",
