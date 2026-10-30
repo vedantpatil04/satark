@@ -89,3 +89,4 @@ export const TeacherScreenViewerModal: React.FC<TeacherScreenViewerModalProps> =
     </Dialog>
   );
 };
+

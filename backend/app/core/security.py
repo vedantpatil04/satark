@@ -95,7 +95,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_access_token(subject: str, role: str, extra_data: Optional[Dict[str, Any]] = None, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(subject: Any, role: str, extra_data: Optional[Dict[str, Any]] = None, expires_delta: Optional[timedelta] = None) -> str:
     now = datetime.now(timezone.utc)
     if expires_delta:
         expire = now + expires_delta
@@ -103,13 +103,19 @@ def create_access_token(subject: str, role: str, extra_data: Optional[Dict[str, 
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode = {
-        "sub": subject,
-        "role": role,
+        "sub": str(subject),
+        "role": str(role),
         "iat": now,
         "exp": expire
     }
     if extra_data:
-        to_encode.update(extra_data)
+        for k, v in extra_data.items():
+            if isinstance(v, (datetime,)):
+                to_encode[k] = v.isoformat()
+            elif hasattr(v, "hex") or str(type(v)).find("UUID") != -1:
+                to_encode[k] = str(v)
+            else:
+                to_encode[k] = v
     
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt

@@ -100,3 +100,4 @@ Add the following in Vercel **Environment Variables** tab:
 4. **Browser Prompt**: Student selects entire screen or window via `navigator.mediaDevices.getDisplayMedia()`.
 5. **P2P Negotiation**: WebRTC SDP Offer / Answer and ICE Candidates exchanged over WebSocket.
 6. **Live Viewing**: Teacher stream opens in high-definition video modal. Persistent banner reminds student that proctor is viewing. Either participant can end the stream anytime.
+

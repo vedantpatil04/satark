@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS public.device_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id UUID NOT NULL REFERENCES public.devices(id) ON DELETE RESTRICT,
     student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
-    session_id UUID NOT NULL,
+    session_id VARCHAR(64) NOT NULL,
     mode VARCHAR(10) NOT NULL CHECK (mode IN ('exam', 'focus')),
     connected_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
     disconnected_at TIMESTAMPTZ,
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS public.activity_events (
     device_id UUID REFERENCES public.devices(id) ON DELETE SET NULL,
     student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE RESTRICT,
     classroom_id UUID REFERENCES public.classrooms(id) ON DELETE SET NULL,
-    session_id UUID NOT NULL,
+    session_id VARCHAR(64) NOT NULL,
     mode VARCHAR(10) NOT NULL,
     event_category VARCHAR(30) NOT NULL,
     event_type VARCHAR(50) NOT NULL,
@@ -477,3 +477,4 @@ CREATE POLICY "Teachers can view audit logs" ON public.audit_logs
 -- ==============================================================================
 -- End of Migration 001
 -- ==============================================================================
+

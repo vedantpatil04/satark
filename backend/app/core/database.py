@@ -3,15 +3,29 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from backend.app.core.config import settings
 
-# SQLite connection args
+# Database connection settings & dialect normalization
+db_url = settings.DATABASE_URL
+if db_url.startswith("postgresql://"):
+    db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 connect_args = {}
-if settings.DATABASE_URL.startswith("sqlite"):
+pool_kwargs = {}
+if db_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+else:
+    # Supabase PostgreSQL Pooler resilience
+    pool_kwargs = {
+        "pool_pre_ping": True,
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_recycle": 300
+    }
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    db_url,
     connect_args=connect_args,
-    echo=False
+    echo=False,
+    **pool_kwargs
 )
 
 # Enable SQLite foreign key constraints

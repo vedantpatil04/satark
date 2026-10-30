@@ -79,3 +79,4 @@ export const StudentScreenShareModal: React.FC<StudentScreenShareModalProps> = (
     </>
   );
 };
+

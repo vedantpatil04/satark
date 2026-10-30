@@ -21,9 +21,9 @@ def log_action(
         safe_details.pop(secret_key, None)
 
     audit_entry = AuditLog(
-        actor_user_id=actor_user_id,
+        actor_user_id=str(actor_user_id) if actor_user_id else None,
         action=action,
-        target_resource=target_resource,
+        target_resource=str(target_resource) if target_resource else None,
         ip_address=ip_address,
         details=safe_details
     )

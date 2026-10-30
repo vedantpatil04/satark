@@ -1,6 +1,9 @@
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Literal
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from typing import Annotated, Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, BeforeValidator
+
+ID = Annotated[str, BeforeValidator(lambda v: str(v) if v is not None else None)]
+OptID = Annotated[Optional[str], BeforeValidator(lambda v: str(v) if v is not None else None)]
 
 
 # ==========================================
@@ -20,7 +23,7 @@ class UserLoginRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
-    id: str
+    id: ID
     email: str
     full_name: str
     role: str
@@ -56,8 +59,8 @@ class ClassroomCreate(BaseModel):
 
 
 class ClassroomResponse(BaseModel):
-    id: str
-    teacher_id: str
+    id: ID
+    teacher_id: ID
     title: str
     subject_code: Optional[str] = None
     description: Optional[str] = None
@@ -74,7 +77,7 @@ class ClassroomJoinRequest(BaseModel):
 
 
 class EnrolledStudentResponse(BaseModel):
-    student_id: str
+    student_id: ID
     full_name: str
     email: str
     enrolled_at: datetime
@@ -99,13 +102,13 @@ class DeviceHeartbeatRequest(BaseModel):
 
 
 class DeviceResponse(BaseModel):
-    id: str
+    id: ID
     hardware_uuid: str
     hostname: Optional[str] = None
     os_type: str
     os_version: Optional[str] = None
     agent_version: str
-    owner_user_id: Optional[str] = None
+    owner_user_id: OptID = None
     last_heartbeat_at: Optional[datetime] = None
     status: str
     created_at: datetime
@@ -114,7 +117,7 @@ class DeviceResponse(BaseModel):
 
 
 class DeviceStatusResponse(BaseModel):
-    id: str
+    id: ID
     status: str
     last_heartbeat_at: Optional[datetime] = None
     is_connected: bool
@@ -138,9 +141,9 @@ class DevicePairRequest(BaseModel):
 
 
 class DevicePairResponse(BaseModel):
-    device_id: str
+    device_id: ID
     device_token: str
-    student_id: str
+    student_id: ID
     student_name: str
     hardware_uuid: str
     status: str
@@ -165,9 +168,9 @@ class ExamCreate(BaseModel):
 
 
 class ExamResponse(BaseModel):
-    id: str
-    classroom_id: str
-    teacher_id: str
+    id: ID
+    classroom_id: ID
+    teacher_id: ID
     title: str
     description: Optional[str] = None
     exam_code: str
@@ -188,7 +191,7 @@ class ExamJoinRequest(BaseModel):
 
 
 class ExamActionResponse(BaseModel):
-    id: str
+    id: ID
     status: str
     message: str
 
@@ -198,7 +201,7 @@ class ExamGrantTimeRequest(BaseModel):
 
 
 class ExamGrantTimeResponse(BaseModel):
-    exam_id: str
+    exam_id: ID
     duration_minutes: int
     additional_minutes: int
     message: str
@@ -210,7 +213,7 @@ class ClassroomAnnouncementCreate(BaseModel):
 
 
 class ClassroomAnnouncementResponse(BaseModel):
-    classroom_id: str
+    classroom_id: ID
     title: str
     message: str
     recipients_count: int
@@ -237,8 +240,8 @@ class ExamQuestionUpdate(BaseModel):
 
 
 class ExamQuestionResponse(BaseModel):
-    id: str
-    exam_id: str
+    id: ID
+    exam_id: ID
     question_text: str
     options: List[str]
     marks: int
@@ -256,9 +259,9 @@ class SaveAnswerRequest(BaseModel):
 
 
 class StudentAnswerResponse(BaseModel):
-    id: str
-    exam_id: str
-    question_id: str
+    id: ID
+    exam_id: ID
+    question_id: ID
     selected_option_index: Optional[int] = None
     answered_at: datetime
 
@@ -270,9 +273,9 @@ class ExamSubmitRequest(BaseModel):
 
 
 class ExamSubmissionResponse(BaseModel):
-    id: str
-    exam_id: str
-    student_id: str
+    id: ID
+    exam_id: ID
+    student_id: ID
     student_name: Optional[str] = None
     score: Optional[int] = None
     total_marks: Optional[int] = None
@@ -293,9 +296,9 @@ class FocusSessionCreate(BaseModel):
 
 
 class FocusSessionResponse(BaseModel):
-    id: str
-    student_id: str
-    classroom_id: Optional[str] = None
+    id: ID
+    student_id: ID
+    classroom_id: OptID = None
     goal_title: str
     planned_duration_minutes: int
     actual_focus_seconds: int
@@ -363,17 +366,17 @@ class EventIngestResponse(BaseModel):
 # Alert & Notification Schemas
 # ==========================================
 class AlertResponse(BaseModel):
-    id: str
-    session_id: str
-    student_id: str
-    device_id: Optional[str] = None
-    primary_event_id: Optional[str] = None
+    id: ID
+    session_id: ID
+    student_id: ID
+    device_id: OptID = None
+    primary_event_id: OptID = None
     alert_type: str
     severity: str
     description: str
     evidence_summary: Optional[Dict[str, Any]] = None
     is_acknowledged: bool
-    acknowledged_by: Optional[str] = None
+    acknowledged_by: OptID = None
     acknowledged_at: Optional[datetime] = None
     proctor_notes: Optional[str] = None
     created_at: datetime
@@ -386,8 +389,8 @@ class AlertAcknowledgeRequest(BaseModel):
 
 
 class NotificationResponse(BaseModel):
-    id: str
-    user_id: str
+    id: ID
+    user_id: ID
     title: str
     message: str
     notification_type: str
@@ -401,10 +404,10 @@ class NotificationResponse(BaseModel):
 # Audit Schemas
 # ==========================================
 class AuditLogResponse(BaseModel):
-    id: str
-    actor_user_id: Optional[str] = None
+    id: ID
+    actor_user_id: OptID = None
     action: str
-    target_resource: Optional[str] = None
+    target_resource: OptID = None
     ip_address: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
     timestamp: datetime

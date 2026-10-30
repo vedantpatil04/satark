@@ -31,3 +31,4 @@ export const getSupabase = (): SupabaseClient => {
 };
 
 export const supabase = getSupabase();
+

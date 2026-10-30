@@ -269,3 +269,4 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
     requestScreenShare,
   };
 }
+
