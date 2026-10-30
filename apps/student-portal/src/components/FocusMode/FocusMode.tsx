@@ -4,10 +4,26 @@ import { useToast } from "@/hooks/use-toast";
 import { Maximize2, Minimize2, XCircle, MessageSquare, StopCircle } from "lucide-react";
 import FocusTimer from "./FocusTimer";
 import CameraFeed from "./CameraFeed";
-import ScreenShare from "./ScreenShare";
-import DistractionAlert from "./DistractionAlert";
 import Chatbot from "./Chatbot";
-import FocusSessionSummary from "./FocusSessionSummary";
+
+const ScreenShare = ({ onDistraction }: { onDistraction?: (msg: string) => void }) => (
+  <div className="p-4 text-center text-sm text-muted-foreground border rounded">Screen Share Monitor</div>
+);
+
+const DistractionAlert = ({ message, onDismiss }: { message: string; onDismiss: () => void }) => (
+  <div className="p-3 bg-red-500/20 text-red-400 border border-red-500 rounded flex justify-between">
+    <span>{message}</span>
+    <button onClick={onDismiss} className="text-xs underline ml-2">Dismiss</button>
+  </div>
+);
+
+const FocusSessionSummary = ({ stats, onClose }: { stats: any; onClose: () => void }) => (
+  <div className="p-4 bg-background border rounded text-center space-y-2">
+    <h3 className="font-bold">Session Summary</h3>
+    <p className="text-sm">Score: {stats.focusScore}%</p>
+    <Button size="sm" onClick={onClose}>Close</Button>
+  </div>
+);
 
 interface FocusModeProps {
   duration: number;
@@ -128,7 +144,7 @@ const FocusMode = ({ duration, goal, monitoringType, onExit }: FocusModeProps) =
             )}
             
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <FocusTimer duration={duration} onComplete={handleSessionComplete} />
+              <FocusTimer durationMinutes={duration} onTimeUp={handleSessionComplete} />
             </div>
           </div>
         </div>
@@ -142,9 +158,9 @@ const FocusMode = ({ duration, goal, monitoringType, onExit }: FocusModeProps) =
 
         {/* Floating Elements */}
         {(monitoringType === 'camera' || monitoringType === 'both') && (
-          <CameraFeed onDistraction={handleDistraction} />
+          <CameraFeed onFocusStateChange={handleDistraction} />
         )}
-        <DistractionAlert message={distraction} onClose={() => setDistraction(null)} />
+        {distraction && <DistractionAlert message={distraction} onDismiss={() => setDistraction(null)} />}
       </div>
 
       {/* CLEANUP: Removed the entire bottom status footer section here */}

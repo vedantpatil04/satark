@@ -22,7 +22,11 @@ interface Question {
   explanation?: string;
 }
 
-const QuizGenerator = () => {
+interface QuizGeneratorProps {
+  onQuizSubmit?: (topic: string, score: number, totalQuestions: number) => Promise<void> | void;
+}
+
+const QuizGenerator = ({ onQuizSubmit }: QuizGeneratorProps = {}) => {
   const [step, setStep] = useState<'concepts' | 'generating' | 'quiz' | 'results'>('concepts');
   const [concepts, setConcepts] = useState("");
   const [questionCount, setQuestionCount] = useState("5");

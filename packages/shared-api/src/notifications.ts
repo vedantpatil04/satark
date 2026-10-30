@@ -19,3 +19,5 @@ export const notificationsApi = {
     }),
 };
 
+export type { NotificationItem } from "@satark/shared-types";
+

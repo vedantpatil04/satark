@@ -38,7 +38,7 @@ const ScreenMonitor = () => {
           cursor: "never",
         },
         audio: false,
-      });
+      } as any);
 
       screenStreamRef.current = displayStream;
       setIsMonitoring(true);

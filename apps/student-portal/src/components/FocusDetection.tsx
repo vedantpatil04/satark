@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { Camera, AlertCircle, CheckCircle2, Loader2, Bell, Eye } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Progress } from "@/components/ui/progress";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Camera, AlertCircle, CheckCircle2, Loader2, Bell, Eye, EyeOff, RefreshCw, UserCheck, UserX } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import * as tmImage from "@teachablemachine/image";
 import { startContinuousAlarm, stopContinuousAlarm, isAlarmPlaying } from "@/utils/beep";
 
@@ -9,6 +9,7 @@ import { startContinuousAlarm, stopContinuousAlarm, isAlarmPlaying } from "@/uti
 declare global {
   interface Window {
     cv: any;
+    Module?: any;
   }
 }
 
@@ -16,6 +17,7 @@ interface FocusState {
   isFocused: boolean;
   confidence: number;
   status: "loading" | "ready" | "detecting" | "error";
+  loadingStage?: string;
   error?: string;
   predictions?: { className: string; probability: number }[];
 }
@@ -24,230 +26,385 @@ interface FocusDetectionProps {
   onDistractedTooLong?: () => void;
 }
 
+const OPENCV_CDN_URL = "https://docs.opencv.org/4.8.0/opencv.js";
+
 const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
+  const isMountedRef = useRef<boolean>(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number>();
-  
+  const loopTimerRef = useRef<any>(null);
+
   // Model Refs
   const tmModelRef = useRef<tmImage.CustomMobileNet | null>(null);
   const faceCascadeRef = useRef<any>(null);
   const eyeCascadeRef = useRef<any>(null);
-  
+
   const distractedTimeRef = useRef<number>(0);
   const focusedTimeRef = useRef<number>(0);
-  
-  // Real-time eye tracking status
+
+  // Detection Status
+  const [faceDetected, setFaceDetected] = useState<boolean>(false);
   const [eyesDetected, setEyesDetected] = useState<boolean>(false);
+  const [alarmActive, setAlarmActive] = useState<boolean>(false);
 
   const [focusState, setFocusState] = useState<FocusState>({
     isFocused: false,
     confidence: 0,
     status: "loading",
+    loadingStage: "Requesting camera access...",
   });
 
-  const [alarmActive, setAlarmActive] = useState(false);
+  // Ensure OpenCV.js script is loaded and initialized
+  const loadOpenCv = useCallback((): Promise<any> => {
+    return new Promise((resolve, reject) => {
+      if (window.cv && window.cv.Mat && window.cv.CascadeClassifier) {
+        return resolve(window.cv);
+      }
 
-  useEffect(() => {
-    const startWebcam = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
-        });
+      // Check if script tag exists
+      let script = document.querySelector(`script[src*="opencv.js"]`) as HTMLScriptElement;
+      if (!script) {
+        script = document.createElement("script");
+        script.src = OPENCV_CDN_URL;
+        script.async = true;
+        script.type = "text/javascript";
+        document.body.appendChild(script);
+      }
 
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          streamRef.current = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play();
-            waitForOpenCV();
-          };
+      const startTime = Date.now();
+      const timeoutMs = 30000; // 30 seconds max for CDN download
+
+      const interval = setInterval(() => {
+        if (!isMountedRef.current) {
+          clearInterval(interval);
+          return;
         }
-      } catch (err) {
+
+        if (window.cv && window.cv.Mat && window.cv.CascadeClassifier) {
+          clearInterval(interval);
+          resolve(window.cv);
+        } else if (Date.now() - startTime > timeoutMs) {
+          clearInterval(interval);
+          reject(new Error("OpenCV runtime download timed out. Check internet connection."));
+        }
+      }, 200);
+    });
+  }, []);
+
+  // Write remote XML file into OpenCV virtual filesystem safely
+  const loadFileToOpenCV = async (url: string, path: string) => {
+    const cv = window.cv;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Failed to load ${url} (HTTP ${response.status})`);
+    }
+    const buffer = await response.arrayBuffer();
+    const data = new Uint8Array(buffer);
+
+    // Clean up existing virtual file if already present (prevents ErrnoError: 17 on re-mount)
+    try {
+      cv.FS_unlink('/' + path);
+    } catch {
+      // Ignored if file does not exist yet
+    }
+    cv.FS_createDataFile('/', path, data, true, false, false);
+  };
+
+  // Main initialization pipeline
+  const initPipeline = useCallback(async () => {
+    if (!isMountedRef.current) return;
+
+    setFocusState({
+      isFocused: false,
+      confidence: 0,
+      status: "loading",
+      loadingStage: "Requesting camera access...",
+    });
+
+    try {
+      // 1. Request camera stream
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+      });
+
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await new Promise<void>((resolve) => {
+          if (!videoRef.current) return resolve();
+          if (videoRef.current.readyState >= 2) return resolve();
+          videoRef.current.onloadedmetadata = () => resolve();
+        });
+        await videoRef.current.play().catch(() => {});
+      }
+
+      // 2. Load OpenCV.js
+      if (isMountedRef.current) {
+        setFocusState((prev) => ({
+          ...prev,
+          loadingStage: "Loading OpenCV computer vision engine...",
+        }));
+      }
+      const cv = await loadOpenCv();
+
+      // 3. Load Teachable Machine Posture Model
+      if (isMountedRef.current) {
+        setFocusState((prev) => ({
+          ...prev,
+          loadingStage: "Loading posture classification model...",
+        }));
+      }
+
+      try {
+        const modelURL = window.location.origin + "/models/model.json";
+        const metadataURL = window.location.origin + "/models/metadata.json";
+        const tmModel = await tmImage.load(modelURL, metadataURL);
+        tmModelRef.current = tmModel;
+      } catch (tmErr) {
+        console.warn("Teachable machine model load warning, proceeding with Haar Cascades:", tmErr);
+      }
+
+      // 4. Load Haar Cascades into OpenCV Virtual Filesystem
+      if (isMountedRef.current) {
+        setFocusState((prev) => ({
+          ...prev,
+          loadingStage: "Loading Haar Cascade face & eye detectors...",
+        }));
+      }
+
+      await loadFileToOpenCV('/models/haarcascade_frontalface_default.xml', 'haarcascade_frontalface_default.xml');
+      await loadFileToOpenCV('/models/haarcascade_eye.xml', 'haarcascade_eye.xml');
+
+      if (!faceCascadeRef.current) {
+        faceCascadeRef.current = new cv.CascadeClassifier();
+      }
+      faceCascadeRef.current.load('haarcascade_frontalface_default.xml');
+
+      if (!eyeCascadeRef.current) {
+        eyeCascadeRef.current = new cv.CascadeClassifier();
+      }
+      eyeCascadeRef.current.load('haarcascade_eye.xml');
+
+      if (isMountedRef.current) {
+        setFocusState((prev) => ({
+          ...prev,
+          status: "detecting",
+          loadingStage: undefined,
+        }));
+        startDetectionLoop();
+      }
+    } catch (err: any) {
+      console.error("AI Vision initialization error:", err);
+      if (isMountedRef.current) {
+        let msg = err.message || "Failed to initialize camera and AI models.";
+        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+          msg = "Camera permission denied. Please allow camera access in your browser.";
+        } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+          msg = "No webcam found. Please connect a camera to use AI Focus monitoring.";
+        }
         setFocusState({
           isFocused: false,
           confidence: 0,
           status: "error",
-          error: "Camera access denied. Please enable camera permissions.",
+          error: msg,
         });
       }
-    };
-
-    startWebcam();
-
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      stopContinuousAlarm();
-      
-      // Cleanup OpenCV objects
-      if (faceCascadeRef.current) faceCascadeRef.current.delete();
-      if (eyeCascadeRef.current) eyeCascadeRef.current.delete();
-    };
-  }, []);
-
-  // Poll until the OpenCV.js script fully loads from index.html
-  const waitForOpenCV = () => {
-    const checkCv = setInterval(() => {
-      if (window.cv && window.cv.Mat) {
-        clearInterval(checkCv);
-        loadModels();
-      }
-    }, 200);
-  };
-
-  const loadFileToOpenCV = async (url: string, path: string) => {
-    const response = await fetch(url);
-    const buffer = await response.arrayBuffer();
-    const data = new Uint8Array(buffer);
-    window.cv.FS_createDataFile('/', path, data, true, false, false);
-  };
-
-  const loadModels = async () => {
-    try {
-      const cv = window.cv;
-      
-      // 1. Load Custom Teachable Machine Posture Model
-      const modelURL = window.location.origin + "/models/model.json";
-      const metadataURL = window.location.origin + "/models/metadata.json";
-      const tmModel = await tmImage.load(modelURL, metadataURL);
-      tmModelRef.current = tmModel;
-      
-      // 2. Load OpenCV Haar Cascades
-      setFocusState(prev => ({ ...prev, status: "loading" }));
-      
-      await loadFileToOpenCV('/models/haarcascade_frontalface_default.xml', 'haarcascade_frontalface_default.xml');
-      await loadFileToOpenCV('/models/haarcascade_eye.xml', 'haarcascade_eye.xml');
-
-      faceCascadeRef.current = new cv.CascadeClassifier();
-      faceCascadeRef.current.load('haarcascade_frontalface_default.xml');
-
-      eyeCascadeRef.current = new cv.CascadeClassifier();
-      eyeCascadeRef.current.load('haarcascade_eye.xml');
-      
-      setFocusState((prev) => ({ ...prev, status: "ready" }));
-      startDetection();
-    } catch (error) {
-      console.error("Model load error:", error);
-      setFocusState({
-        isFocused: false,
-        confidence: 0,
-        status: "error",
-        error: "Failed to load AI models. Please ensure XML files are in public/models/.",
-      });
     }
-  };
+  }, [loadOpenCv]);
 
-  const startDetection = () => {
+  // Detection Loop
+  const startDetectionLoop = useCallback(() => {
     const cv = window.cv;
-    
+
     const detect = async () => {
-      if (!videoRef.current || !canvasRef.current || !tmModelRef.current || !faceCascadeRef.current) return;
+      if (!isMountedRef.current) return;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+
+      if (!video || !canvas || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+        // Video not ready yet, retry in 500ms
+        loopTimerRef.current = setTimeout(() => {
+          animationFrameRef.current = requestAnimationFrame(detect);
+        }, 500);
+        return;
+      }
+
+      let src: any = null;
+      let gray: any = null;
+      let faces: any = null;
 
       try {
-        // --- 1. RUN TEACHABLE MACHINE POSTURE CHECK ---
-        const tmPredictions = await tmModelRef.current.predict(videoRef.current);
-        const sortedPredictions = tmPredictions.sort((a, b) => b.probability - a.probability);
-        const topPrediction = sortedPredictions[0];
-        const isTmFocused = topPrediction.className.toLowerCase().includes("focused");
-        const confidence = topPrediction.probability;
+        // -------------------------------------------------------------
+        // A. Teachable Machine Posture Inference
+        // -------------------------------------------------------------
+        let isTmFocused = true;
+        let postureConfidence = 0.85;
+        let sortedPredictions: { className: string; probability: number }[] = [];
 
-        // --- 2. RUN OPENCV.JS HAAR CASCADE EYE DETECTION ---
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        
-        if (ctx) {
-          // Draw video frame to hidden canvas for OpenCV processing
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+        if (tmModelRef.current) {
+          try {
+            const tmPredictions = await tmModelRef.current.predict(video);
+            sortedPredictions = tmPredictions.sort((a, b) => b.probability - a.probability);
+            const topPrediction = sortedPredictions[0];
+            if (topPrediction) {
+              isTmFocused = topPrediction.className.toLowerCase().includes("focused");
+              postureConfidence = topPrediction.probability;
+            }
+          } catch (e) {
+            // TM predict error, ignore and fall back
+          }
+        }
+
+        // -------------------------------------------------------------
+        // B. OpenCV Haar Cascade Face & Eye Detection
+        // -------------------------------------------------------------
+        const ctx = canvas.getContext("2d");
+        let areFacesVisible = false;
+        let areEyesVisible = false;
+
+        if (ctx && cv && faceCascadeRef.current && eyeCascadeRef.current) {
+          canvas.width = Math.min(video.videoWidth, 320);
+          canvas.height = Math.min(video.videoHeight, 240);
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-          let src = cv.imread(canvas);
-          let gray = new cv.Mat();
+          src = cv.imread(canvas);
+          gray = new cv.Mat();
           cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
-          let faces = new cv.RectVector();
-          // detectMultiScale(image, objects, scaleFactor, minNeighbors)
-          faceCascadeRef.current.detectMultiScale(gray, faces, 1.3, 5);
-          
-          let areEyesVisible = false;
+          faces = new cv.RectVector();
+          faceCascadeRef.current.detectMultiScale(gray, faces, 1.25, 4);
 
           if (faces.size() > 0) {
-            let face = faces.get(0);
-            let roiGray = gray.roi(face);
-            let eyes = new cv.RectVector();
-            
-            eyeCascadeRef.current.detectMultiScale(roiGray, eyes);
+            areFacesVisible = true;
+            const face = faces.get(0);
+            const roiGray = gray.roi(face);
+            const eyes = new cv.RectVector();
+
+            // Run eye detection inside upper portion of face ROI
+            eyeCascadeRef.current.detectMultiScale(roiGray, eyes, 1.15, 3);
             if (eyes.size() >= 1) {
               areEyesVisible = true;
             }
-            
+
             roiGray.delete();
             eyes.delete();
           }
 
-          setEyesDetected(areEyesVisible);
-
-          // Clean up C++ memory allocated by OpenCV.js
-          src.delete();
-          gray.delete();
-          faces.delete();
-
-          // --- 3. HYBRID FOCUS LOGIC ---
-          const isFocused = isTmFocused && areEyesVisible;
-
-          // Alarm and distraction logic
-          if (!isFocused) {
-            distractedTimeRef.current += 1; 
-            focusedTimeRef.current = 0; 
-            
-            if (distractedTimeRef.current >= 15 && !isAlarmPlaying()) {
-              startContinuousAlarm(1200, 400, 300);
-              setAlarmActive(true);
-              onDistractedTooLong?.();
-            }
-          } else {
-            distractedTimeRef.current = 0; 
-            focusedTimeRef.current += 1; 
-            
-            if (focusedTimeRef.current >= 2 && isAlarmPlaying()) {
-              stopContinuousAlarm();
-              setAlarmActive(false);
-            }
+          if (isMountedRef.current) {
+            setFaceDetected(areFacesVisible);
+            setEyesDetected(areEyesVisible);
           }
+        }
 
+        // -------------------------------------------------------------
+        // C. Hybrid Decision & Attention Alert Logic
+        // -------------------------------------------------------------
+        // Focused condition: Face detected AND either eyes detected or high posture focus
+        const isCurrentlyFocused = areFacesVisible && (areEyesVisible || isTmFocused);
+
+        if (!isCurrentlyFocused) {
+          distractedTimeRef.current += 1;
+          focusedTimeRef.current = 0;
+
+          if (distractedTimeRef.current >= 12 && !isAlarmPlaying()) {
+            startContinuousAlarm(1200, 400, 300);
+            if (isMountedRef.current) setAlarmActive(true);
+            onDistractedTooLong?.();
+          }
+        } else {
+          distractedTimeRef.current = 0;
+          focusedTimeRef.current += 1;
+
+          if (focusedTimeRef.current >= 2 && isAlarmPlaying()) {
+            stopContinuousAlarm();
+            if (isMountedRef.current) setAlarmActive(false);
+          }
+        }
+
+        if (isMountedRef.current) {
           setFocusState({
-            isFocused,
-            confidence,
+            isFocused: isCurrentlyFocused,
+            confidence: postureConfidence,
             status: "detecting",
             predictions: sortedPredictions,
           });
         }
+      } catch (loopErr) {
+        console.warn("Detection frame error:", loopErr);
+      } finally {
+        // Free OpenCV memory allocations
+        if (src) src.delete();
+        if (gray) gray.delete();
+        if (faces) faces.delete();
+      }
 
-        // Run next frame roughly every 1 second to save CPU
-        setTimeout(() => {
+      // Schedule next frame in 1 second to preserve client battery & CPU
+      if (isMountedRef.current) {
+        loopTimerRef.current = setTimeout(() => {
           animationFrameRef.current = requestAnimationFrame(detect);
         }, 1000);
-
-      } catch (error) {
-        console.error("Detection loop error:", error);
       }
     };
 
     detect();
-  };
+  }, [onDistractedTooLong]);
+
+  // Mount effect
+  useEffect(() => {
+    isMountedRef.current = true;
+    initPipeline();
+
+    return () => {
+      isMountedRef.current = false;
+
+      // Stop camera stream tracks
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
+      // Cancel loops
+      if (loopTimerRef.current) {
+        clearTimeout(loopTimerRef.current);
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+
+      // Stop sound alarm
+      stopContinuousAlarm();
+
+      // Free classifiers
+      try {
+        if (faceCascadeRef.current) {
+          faceCascadeRef.current.delete();
+          faceCascadeRef.current = null;
+        }
+        if (eyeCascadeRef.current) {
+          eyeCascadeRef.current.delete();
+          eyeCascadeRef.current = null;
+        }
+      } catch {
+        // Ignored
+      }
+    };
+  }, [initPipeline]);
 
   return (
     <div className="space-y-4">
+      {/* Hidden canvas used for OpenCV frame reading */}
       <canvas ref={canvasRef} className="hidden" />
 
-      <div className="relative rounded-lg overflow-hidden bg-black/50 aspect-video">
+      {/* Video Container */}
+      <div className="relative rounded-xl overflow-hidden bg-black/60 aspect-video shadow-md border border-border/40">
         <video
           ref={videoRef}
           autoPlay
@@ -256,87 +413,126 @@ const FocusDetection = ({ onDistractedTooLong }: FocusDetectionProps) => {
           className="w-full h-full object-cover"
           style={{ transform: "scaleX(-1)" }}
         />
-        
-        {/* OpenCV Tracking Status Overlay */}
-        <div className="absolute top-4 left-4 bg-black/60 px-3 py-1.5 rounded-full flex items-center gap-2 text-sm backdrop-blur-md">
-          <Eye className={`h-4 w-4 ${eyesDetected ? 'text-green-400' : 'text-red-400'}`} />
-          <span className="text-white/80 font-medium">
-            {eyesDetected ? "Eyes Detected (OpenCV)" : "No Eyes Detected"}
-          </span>
-        </div>
-        
-        {alarmActive && (
-          <div className="absolute top-4 right-4 bg-red-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 animate-pulse shadow-lg">
-            <Bell className="h-5 w-5 animate-bounce" />
-            <span className="font-bold">REFOCUS!</span>
+
+        {/* Live OpenCV Detection Status Overlay */}
+        {focusState.status === "detecting" && (
+          <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-2 text-xs border border-white/10 shadow-sm">
+            {eyesDetected ? (
+              <>
+                <Eye className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="text-emerald-300 font-medium">Face & Eyes Detected</span>
+              </>
+            ) : faceDetected ? (
+              <>
+                <UserCheck className="h-3.5 w-3.5 text-amber-400" />
+                <span className="text-amber-300 font-medium">Face Detected (Eyes Unclear)</span>
+              </>
+            ) : (
+              <>
+                <UserX className="h-3.5 w-3.5 text-rose-400" />
+                <span className="text-rose-300 font-medium">No Face Detected</span>
+              </>
+            )}
           </div>
         )}
-        
+
+        {/* Refocus Alarm Pulsing Badge */}
+        {alarmActive && (
+          <div className="absolute top-3 right-3 bg-rose-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse shadow-lg text-xs font-bold">
+            <Bell className="h-4 w-4 animate-bounce" />
+            <span>LOOK AT SCREEN!</span>
+          </div>
+        )}
+
+        {/* Progressive Loading Spinner Overlay */}
         {focusState.status === "loading" && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/70">
-            <div className="text-center">
-              <Loader2 className="h-12 w-12 mx-auto mb-2 animate-spin" />
-              <p className="text-lg">Loading OpenCV Haar Cascades...</p>
+          <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+            <div className="text-center space-y-3 max-w-xs">
+              <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin" />
+              <p className="text-sm font-semibold text-white">Initializing AI Vision</p>
+              <p className="text-xs text-muted-foreground animate-pulse">
+                {focusState.loadingStage || "Loading OpenCV Haar Cascades..."}
+              </p>
             </div>
           </div>
         )}
       </div>
 
-      {focusState.status === "error" ? (
-        <Alert variant="destructive">
+      {/* Error State with Actionable Recovery */}
+      {focusState.status === "error" && (
+        <Alert variant="destructive" className="bg-destructive/10 border-destructive/30">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{focusState.error}</AlertDescription>
+          <AlertTitle className="text-sm font-semibold">Camera / AI Monitor Issue</AlertTitle>
+          <AlertDescription className="text-xs mt-1 flex flex-col gap-2">
+            <span>{focusState.error}</span>
+            <div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={initPipeline}
+                className="gap-1.5 text-xs h-7 mt-1 border-destructive/40 hover:bg-destructive/20"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Retry Camera & AI
+              </Button>
+            </div>
+          </AlertDescription>
         </Alert>
-      ) : focusState.status === "detecting" ? (
-        <div className="space-y-3">
+      )}
+
+      {/* Real-time Status Card */}
+      {focusState.status === "detecting" && (
+        <div className="p-3.5 rounded-xl border border-border/50 bg-background/60 backdrop-blur-sm space-y-3">
           {alarmActive && (
-            <div className="bg-red-500/20 border-2 border-red-500 rounded-lg p-4 flex items-start gap-3 animate-pulse">
-              <Bell className="h-6 w-6 text-red-400 mt-0.5 animate-bounce" />
-              <div>
-                <p className="text-red-400 font-bold text-lg">⚠️ DISTRACTION ALERT!</p>
-                <p className="text-sm text-white/90 mt-1">
-                  Alarm will stop when you focus for 2 seconds
+            <div className="bg-rose-500/15 border border-rose-500/40 rounded-lg p-3 flex items-start gap-3">
+              <Bell className="h-5 w-5 text-rose-400 mt-0.5 animate-bounce flex-shrink-0" />
+              <div className="text-xs">
+                <p className="text-rose-400 font-bold">Distraction Alert Active</p>
+                <p className="text-muted-foreground mt-0.5">
+                  Look directly at the screen for 2 seconds to dismiss the alarm.
                 </p>
               </div>
             </div>
           )}
 
-          <div className="flex items-center justify-between p-4 rounded-lg bg-white/10">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               {focusState.isFocused ? (
                 <>
-                  <CheckCircle2 className="h-6 w-6 text-green-400" />
+                  <div className="p-2 rounded-lg bg-emerald-500/15 text-emerald-400">
+                    <CheckCircle2 className="h-5 w-5" />
+                  </div>
                   <div>
-                    <span className="font-semibold text-green-400 text-lg">Focused ✓</span>
-                    <p className="text-xs text-white/70">
-                      {alarmActive ? `Hold focus... ${focusedTimeRef.current}s` : "Great work!"}
+                    <span className="font-semibold text-sm text-emerald-400">Deep Focus Verified</span>
+                    <p className="text-[11px] text-muted-foreground">
+                      {alarmActive ? `Holding focus... ${focusedTimeRef.current}s` : "Optimal posture & screen gaze"}
                     </p>
                   </div>
                 </>
               ) : (
                 <>
-                  <AlertCircle className="h-6 w-6 text-yellow-400" />
+                  <div className="p-2 rounded-lg bg-amber-500/15 text-amber-400">
+                    <AlertCircle className="h-5 w-5" />
+                  </div>
                   <div>
-                    <span className="font-semibold text-yellow-400 text-lg">
-                      Distracted
-                    </span>
-                    <p className="text-xs text-white/70">
-                      {distractedTimeRef.current}s distracted
-                      {distractedTimeRef.current >= 15 ? " - ALARM ACTIVE!" : ""}
+                    <span className="font-semibold text-sm text-amber-400">Distraction Detected</span>
+                    <p className="text-[11px] text-muted-foreground">
+                      {distractedTimeRef.current}s away from study focus
                     </p>
                   </div>
                 </>
               )}
             </div>
+
             <div className="text-right">
-              <span className="text-2xl font-bold">
+              <span className="text-xl font-bold font-mono">
                 {(focusState.confidence * 100).toFixed(0)}%
               </span>
-              <p className="text-xs text-white/70">Posture Confidence</p>
+              <p className="text-[10px] text-muted-foreground">Posture Confidence</p>
             </div>
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 };

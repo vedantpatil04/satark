@@ -46,3 +46,5 @@ export const classroomsApi = {
     ),
 };
 
+export type { Classroom, EnrolledStudent } from "@satark/shared-types";
+

@@ -18,3 +18,5 @@ export const alertsApi = {
     }),
 };
 
+export type { Alert } from "@satark/shared-types";
+

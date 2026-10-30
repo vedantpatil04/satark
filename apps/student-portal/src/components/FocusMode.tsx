@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { FocusDetection } from './FocusDetection';
-import { AIFocusAssistant } from './AIFocusAssistant';
+import FocusDetection from './FocusDetection';
+import AIFocusAssistant from './AIFocusAssistant';
 
 interface FocusModeProps {
   duration: number; // in minutes

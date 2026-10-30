@@ -87,7 +87,7 @@ const ScreenActivityDetector = ({ autoStart = false }: Props) => {
         video: { displaySurface: "monitor" },
         audio: false,
         preferCurrentTab: false,
-      });
+      } as any);
 
       const videoTrack = stream.getVideoTracks()[0];
       const settings = videoTrack.getSettings();

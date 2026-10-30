@@ -33,3 +33,5 @@ export const focusApi = {
   getHistory: () => apiClient<FocusSession[]>("/focus/history"),
 };
 
+export type { FocusSession } from "@satark/shared-types";
+

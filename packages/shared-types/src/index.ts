@@ -121,7 +121,7 @@ export interface Device {
   agent_version: string;
   owner_user_id?: string;
   last_heartbeat_at?: string;
-  status: "registered" | "active" | "offline" | "revoked";
+  status: "registered" | "active" | "connected" | "offline" | "inactive" | "disconnected" | "revoked";
   created_at: string;
 }
 

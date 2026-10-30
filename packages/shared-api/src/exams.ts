@@ -169,3 +169,5 @@ export const examsApi = {
     ),
 };
 
+export type { ExamQuestion, StudentAnswer, ExamSubmission } from "@satark/shared-types";
+

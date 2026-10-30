@@ -35,3 +35,5 @@ export const devicesApi = {
     }),
 };
 
+export type { Device } from "@satark/shared-types";
+
