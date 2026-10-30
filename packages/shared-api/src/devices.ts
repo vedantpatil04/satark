@@ -1,0 +1,37 @@
+import { apiClient } from "./client";
+import type { Device } from "@satark/shared-types";
+
+export interface ActivityEvent {
+  id: string;
+  device_id: string;
+  student_id: string;
+  classroom_id?: string;
+  session_id: string;
+  mode: "exam" | "focus";
+  event_category: string;
+  event_type: string;
+  source: "agent" | "server" | "demo";
+  severity: "low" | "medium" | "high" | "critical";
+  occurred_at: string;
+  received_at: string;
+  details: Record<string, any>;
+}
+
+export const devicesApi = {
+  list: () => apiClient<Device[]>("/devices"),
+
+  get: (id: string) => apiClient<Device>(`/devices/${id}`),
+
+  getEvents: (deviceId: string) => apiClient<ActivityEvent[]>(`/devices/${deviceId}/events`),
+
+  getPairingCode: () =>
+    apiClient<{ pairing_code: string; expires_in_seconds: number }>("/devices/pairing-code", {
+      method: "POST",
+    }),
+
+  revoke: (deviceId: string) =>
+    apiClient<{ message: string; device_id: string }>(`/devices/${deviceId}/revoke`, {
+      method: "POST",
+    }),
+};
+

@@ -27,27 +27,41 @@ The system strictly adheres to **visible, authorized, and transparent monitoring
 
 ---
 
-## 2. Separate Portal Experiences (Shared Infrastructure)
+## 2. Separate Frontends & Monorepo Architecture (Shared Infrastructure)
 
-Both portals are delivered within a **single unified React application** and backed by **one FastAPI service**, yet offer completely distinct, protected portal layouts and navigation.
+The platform is structured as an npm monorepo with two independent frontend applications backed by **one authoritative FastAPI service** and **one Supabase PostgreSQL project**:
 
 ```mermaid
 flowchart TD
-    subgraph Single React Web App
-        ROUTER["React Router (BrowserRouter)"]
-        
-        subgraph Teacher Portal Group ["/teacher/* (Role: teacher)"]
-            T_LOGIN["/teacher/login"]
-            T_DASH["/teacher/dashboard"]
-            T_CLS["/teacher/classrooms"]
-            T_EXM["/teacher/exams"]
-            T_FOC["/teacher/focus"]
-            T_DEV["/teacher/devices"]
-            T_NOT["/teacher/notifications"]
-            T_REP["/teacher/reports"]
+    subgraph Monorepo ["SATARK Monorepo (apps/ & packages/)"]
+        subgraph Apps ["Independent Applications"]
+            T_APP["apps/teacher-portal (Vercel Project 1: Port 5174)"]
+            S_APP["apps/student-portal (Vercel Project 2: Port 5173)"]
         end
 
-        subgraph Student Portal Group ["/student/* (Role: student)"]
+        subgraph Packages ["Shared Monorepo Packages"]
+            PKG_TYPES["@satark/shared-types"]
+            PKG_API["@satark/shared-api"]
+            PKG_AUTH["@satark/shared-auth (Supabase Auth & Roles)"]
+            PKG_UI["@satark/shared-ui (Radix Components & Theme)"]
+            PKG_CFG["@satark/shared-config"]
+        end
+
+        T_APP --> Packages
+        S_APP --> Packages
+    end
+
+    subgraph Backend_Cloud ["Shared Backend Infrastructure"]
+        FASTAPI["FastAPI Backend Service (Port 8000 / Render)"]
+        SUPABASE["Supabase PostgreSQL + JWKS Auth (ugsizlimcnxtbzkwficf)"]
+        WS_HUB["WebSocket & WebRTC Signaling Hub"]
+    end
+
+    T_APP -->|REST & WSS| FASTAPI
+    S_APP -->|REST & WSS| FASTAPI
+    FASTAPI --> SUPABASE
+    FASTAPI --> WS_HUB
+```
             S_LOGIN["/student/login"]
             S_DASH["/student/dashboard"]
             S_CLS["/student/classrooms"]

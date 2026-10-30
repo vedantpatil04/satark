@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/api/*": ["../../packages/shared-api/src/*"],
+      "@/api": ["../../packages/shared-api/src/index.ts"],
+      "@/components/ui/*": ["../../packages/shared-ui/src/components/*"],
+      "@/components/ui": ["../../packages/shared-ui/src/index.ts"],
+      "@/context/AuthContext": ["../../packages/shared-auth/src/AuthContext.tsx"],
+      "@/components/auth/ProtectedRoute": ["../../packages/shared-auth/src/ProtectedRoute.tsx"],
+      "@/lib/supabase": ["../../packages/shared-auth/src/supabase.ts"],
+      "@/lib/utils": ["../../packages/shared-ui/src/utils.ts"],
+      "@/types": ["../../packages/shared-types/src/index.ts"],
+      "@satark/shared-types": ["../../packages/shared-types/src/index.ts"],
+      "@satark/shared-api": ["../../packages/shared-api/src/index.ts"],
+      "@satark/shared-auth": ["../../packages/shared-auth/src/index.ts"],
+      "@satark/shared-ui": ["../../packages/shared-ui/src/index.ts"],
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src"]
+}
+

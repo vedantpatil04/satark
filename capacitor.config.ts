@@ -3,7 +3,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 const config: CapacitorConfig = {
   appId: "edu.smartclassroom.app",
   appName: "Smart Classroom",
-  webDir: "dist",
+  webDir: "apps/student-portal/dist",
   server: {
     androidScheme: "https",
     cleartext: true,

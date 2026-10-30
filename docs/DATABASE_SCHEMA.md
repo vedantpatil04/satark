@@ -1,7 +1,7 @@
 # Database Schema Specification
 
 **Project**: Smart Classroom – Exam Integrity & Focus Management System  
-**Database Engine**: SQLite 3 (Phase 1 evaluation) with forward-compatibility to PostgreSQL (Phase 2)  
+**Database Engine**: Supabase Managed PostgreSQL (Production) with local SQLite compatibility fallback  
 **ORM**: SQLAlchemy 2.0 (Declarative Base) with Pydantic v2 validation  
 **Roles**: Strictly `teacher` (administrative) and `student` (learner)  
 

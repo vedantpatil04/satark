@@ -31,11 +31,12 @@ A unified, ethical smart classroom platform featuring dual policy-driven operati
 
 ## 2. Technology Architecture
 
-- **Frontend**: React 18, Vite 5, TypeScript 5, Tailwind CSS, shadcn/ui (Radix primitives), Lucide React.
-- **Backend**: Python 3.13, FastAPI, SQLite 3 with SQLAlchemy 2.0 ORM, native WebSockets.
+- **Frontend Architecture**: Decoupled monorepo with **Teacher Portal** (`apps/teacher-portal`), **Student Portal** (`apps/student-portal`), and shared packages (`packages/shared-types`, `shared-api`, `shared-auth`, `shared-ui`, `shared-config`).
+- **Backend**: Python 3.13, FastAPI, Supabase Managed PostgreSQL with SQLAlchemy 2.0 ORM, native WebSockets, and WebRTC streaming signaling.
+- **Identity & Persistence**: Supabase Cloud Auth (ES256 JWKS verification) + Supabase Managed PostgreSQL.
 - **Desktop Agent**: Python 3.13, platform adapters for Windows (`user32` + `psutil`) and Linux (X11 / Wayland), 10-second heartbeat telemetry, local SQLite event queue buffering.
-- **Mobile Container**: Single Android application built with Capacitor reusing the unified React web application.
-- **Security & Privacy**: Strict visible monitoring with explicit consent. **No keystroke loggers, no hidden surveillance, no password harvesting, no screen recording**.
+- **Mobile Container**: Single Android application built with Capacitor reusing the student portal frontend (`apps/student-portal/dist`).
+- **Security & Privacy**: Strict visible monitoring with explicit consent. **No keystroke loggers, no hidden surveillance, no password harvesting, no unauthorized recording**.
 
 ---
 
@@ -54,9 +55,32 @@ A unified, ethical smart classroom platform featuring dual policy-driven operati
 # Linux/macOS:
 source backend/venv/bin/activate
 
-# 2. Install dependencies (if not already installed)
-pip install -r backend/requirements.txt
-pip install requests psutil websockets
+# 2. Run backend (Port 8000)
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 3.3 Running Both Frontend Portals Simultaneously
+```bash
+# In terminal 1 — Start Student Portal (Port 5173):
+npm run dev:student
+
+# In terminal 2 — Start Teacher Portal (Port 5174):
+npm run dev:teacher
+```
+
+### 3.4 Independent Production Builds
+```bash
+# Build Teacher Portal:
+npm run build:teacher
+# Or: cd apps/teacher-portal && npm run build
+
+# Build Student Portal:
+npm run build:student
+# Or: cd apps/student-portal && npm run build
+
+# Build Both:
+npm run build
+```
 
 # 3. Seed Demo Data (Creates test teachers, students, courses, exams, alerts)
 $env:PYTHONPATH="."  # On PowerShell (or export PYTHONPATH=. on bash)

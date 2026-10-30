@@ -3,13 +3,23 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "dev:teacher": "npm run dev --prefix apps/teacher-portal",
+    "dev:student": "npm run dev --prefix apps/student-portal",
+    "build": "npm run build --prefix apps/teacher-portal && npm run build --prefix apps/student-portal",
+    "build:teacher": "npm run build --prefix apps/teacher-portal",
+    "build:student": "npm run build --prefix apps/student-portal",
     "lint": "eslint .",
     "preview": "vite preview",
+    "preview:teacher": "npm run preview --prefix apps/teacher-portal",
+    "preview:student": "npm run preview --prefix apps/student-portal",
     "cap:sync": "npx cap sync android",
-    "cap:build": "npm run build && npx cap sync android",
+    "cap:build": "npm run build:student && npx cap sync android",
     "cap:open": "npx cap open android"
   },
   "dependencies": {
