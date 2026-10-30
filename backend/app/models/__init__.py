@@ -41,7 +41,7 @@ def utc_now() -> datetime:
 
 
 class User(Base):
-    __tablename__ = "profiles"
+    __tablename__ = "users"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     email = Column(String(255), unique=True, nullable=False, index=True)
@@ -67,7 +67,7 @@ class StudentProfile(Base):
     __tablename__ = "student_profiles"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    user_id = Column(String(36), ForeignKey("profiles.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
     student_id_number = Column(String(50), unique=True, nullable=False, index=True)
     branch_or_major = Column(String(100), nullable=True)
     semester = Column(Integer, nullable=True)
@@ -81,7 +81,7 @@ class Classroom(Base):
     __tablename__ = "classrooms"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    teacher_id = Column(String(36), ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True)
+    teacher_id = Column(String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     title = Column(String(150), nullable=False)
     subject_code = Column(String(30), nullable=True)
     description = Column(Text, nullable=True)
@@ -100,7 +100,7 @@ class ClassroomEnrollment(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     classroom_id = Column(String(36), ForeignKey("classrooms.id", ondelete="CASCADE"), nullable=False, index=True)
-    student_id = Column(String(36), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     enrolled_at = Column(DateTime, default=utc_now, nullable=False)
 
     __table_args__ = (
@@ -120,7 +120,7 @@ class Device(Base):
     os_type = Column(String(20), nullable=False)  # 'windows', 'linux', 'macos'
     os_version = Column(String(50), nullable=True)
     agent_version = Column(String(20), nullable=False)
-    owner_user_id = Column(String(36), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True)
+    owner_user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     last_heartbeat_at = Column(DateTime, nullable=True)
     status = Column(String(20), default="offline", nullable=False, index=True)  # 'connected', 'inactive', 'offline'
     created_at = Column(DateTime, default=utc_now, nullable=False)
@@ -135,7 +135,7 @@ class DeviceSession(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     device_id = Column(String(36), ForeignKey("devices.id", ondelete="RESTRICT"), nullable=False, index=True)
-    student_id = Column(String(36), ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True)
+    student_id = Column(String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     session_id = Column(String(36), nullable=False, index=True)  # exam_sessions.id or focus_sessions.id
     mode = Column(String(10), nullable=False)  # 'exam' or 'focus'
     connected_at = Column(DateTime, default=utc_now, nullable=False)
@@ -151,7 +151,7 @@ class ExamSession(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     classroom_id = Column(String(36), ForeignKey("classrooms.id", ondelete="RESTRICT"), nullable=False, index=True)
-    teacher_id = Column(String(36), ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True)
+    teacher_id = Column(String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     title = Column(String(150), nullable=False)
     description = Column(Text, nullable=True)
     exam_code = Column(String(10), unique=True, nullable=False, index=True)
@@ -178,7 +178,7 @@ class FocusSession(Base):
     __tablename__ = "focus_sessions"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    student_id = Column(String(36), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     classroom_id = Column(String(36), ForeignKey("classrooms.id", ondelete="SET NULL"), nullable=True, index=True)
     goal_title = Column(String(200), nullable=False)
     planned_duration_minutes = Column(Integer, default=25, nullable=False)
@@ -198,7 +198,7 @@ class ActivityEvent(Base):
 
     id = Column(String(36), primary_key=True)  # event_id (UUIDv4) for duplicate rejection
     device_id = Column(String(36), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True)
-    student_id = Column(String(36), ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True)
+    student_id = Column(String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
     classroom_id = Column(String(36), ForeignKey("classrooms.id", ondelete="SET NULL"), nullable=True, index=True)
     session_id = Column(String(36), nullable=False, index=True)
     mode = Column(String(10), nullable=False)  # 'exam' or 'focus'
@@ -219,7 +219,7 @@ class Alert(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     session_id = Column(String(36), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    student_id = Column(String(36), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     device_id = Column(String(36), ForeignKey("devices.id", ondelete="SET NULL"), nullable=True, index=True)
     primary_event_id = Column(String(36), ForeignKey("activity_events.id", ondelete="SET NULL"), nullable=True)
     alert_type = Column(String(50), nullable=False)
@@ -227,7 +227,7 @@ class Alert(Base):
     description = Column(Text, nullable=False)
     evidence_summary = Column(JSON, default=dict, nullable=True)
     is_acknowledged = Column(Boolean, default=False, nullable=False, index=True)
-    acknowledged_by = Column(String(36), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True)
+    acknowledged_by = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     acknowledged_at = Column(DateTime, nullable=True)
     proctor_notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
@@ -242,7 +242,7 @@ class Notification(Base):
     __tablename__ = "notifications"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    user_id = Column(String(36), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(150), nullable=False)
     message = Column(Text, nullable=False)
     notification_type = Column(String(30), nullable=False)  # 'exam_announcement', 'focus_nudge', 'security'
@@ -256,7 +256,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    actor_user_id = Column(String(36), ForeignKey("profiles.id", ondelete="SET NULL"), nullable=True, index=True)
+    actor_user_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     action = Column(String(80), nullable=False)  # 'EXAM_STARTED', 'ALERT_ACKNOWLEDGED', etc.
     target_resource = Column(String(80), nullable=True)
     ip_address = Column(String(45), nullable=True)
@@ -288,7 +288,7 @@ class ExamSubmission(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     exam_id = Column(String(36), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    student_id = Column(String(36), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     score = Column(Integer, default=0, nullable=False)
     total_marks = Column(Integer, default=0, nullable=False)
     percentage = Column(Integer, default=0, nullable=False)
@@ -311,7 +311,7 @@ class StudentAnswer(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     submission_id = Column(String(36), ForeignKey("exam_submissions.id", ondelete="CASCADE"), nullable=True, index=True)
     exam_id = Column(String(36), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    student_id = Column(String(36), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     question_id = Column(String(36), ForeignKey("exam_questions.id", ondelete="CASCADE"), nullable=False, index=True)
     selected_option_index = Column(Integer, nullable=True)
     is_correct = Column(Boolean, nullable=True)
@@ -332,7 +332,7 @@ class QuestionBank(Base):
     __tablename__ = "question_banks"
 
     id = Column(GUID(), primary_key=True, default=generate_uuid)
-    teacher_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(150), nullable=False)
     subject = Column(String(100), nullable=False, index=True)
     topic = Column(String(100), nullable=True)
@@ -396,8 +396,8 @@ class MediaShareRequest(Base):
 
     id = Column(GUID(), primary_key=True, default=generate_uuid)
     exam_id = Column(GUID(), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    student_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
-    teacher_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     status = Column(String(20), default="pending", nullable=False)  # 'pending', 'approved', 'rejected', 'sharing', 'stopped'
     requested_at = Column(DateTime, default=utc_now, nullable=False)
     responded_at = Column(DateTime, nullable=True)
@@ -412,7 +412,7 @@ class MediaSessionParticipant(Base):
 
     id = Column(GUID(), primary_key=True, default=generate_uuid)
     exam_id = Column(GUID(), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(GUID(), ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # 'teacher', 'student'
     is_sharing_screen = Column(Boolean, default=False, nullable=False)
     is_camera_on = Column(Boolean, default=False, nullable=False)

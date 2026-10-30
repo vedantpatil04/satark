@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 import type { UserResponse } from "@satark/shared-types";
 import { authApi } from "@satark/shared-api";
-import { supabase, SUPABASE_PUBLISHABLE_KEY } from "./supabase";
 
 export interface AuthContextType {
   user: UserResponse | null;
@@ -34,7 +33,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userData = await authApi.getMe();
       setUser(userData);
     } catch (err) {
-      console.warn("Session expired or token invalid:", err);
+      console.warn("Local session expired or token invalid:", err);
       if (typeof window !== "undefined") {
         localStorage.removeItem("auth_token");
       }
@@ -47,35 +46,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     refreshUser();
-
-    if (SUPABASE_PUBLISHABLE_KEY && supabase) {
-      const {
-        data: { subscription },
-      } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (session?.access_token) {
-          if (typeof window !== "undefined") {
-            localStorage.setItem("auth_token", session.access_token);
-          }
-          setToken(session.access_token);
-          try {
-            const userData = await authApi.getMe();
-            setUser(userData);
-          } catch (e) {
-            console.warn("Could not fetch server profile for Supabase user:", e);
-          }
-        } else if (event === "SIGNED_OUT") {
-          if (typeof window !== "undefined") {
-            localStorage.removeItem("auth_token");
-          }
-          setToken(null);
-          setUser(null);
-        }
-      });
-
-      return () => {
-        subscription.unsubscribe();
-      };
-    }
   }, []);
 
   const login = (newToken: string, newUser: UserResponse) => {
@@ -87,19 +57,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    try {
-      if (SUPABASE_PUBLISHABLE_KEY && supabase) {
-        await supabase.auth.signOut();
-      }
-    } catch (e) {
-      console.warn("Supabase sign out error:", e);
-    } finally {
-      if (typeof window !== "undefined") {
-        localStorage.removeItem("auth_token");
-      }
-      setToken(null);
-      setUser(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("auth_token");
     }
+    setToken(null);
+    setUser(null);
   };
 
   return (
@@ -126,4 +88,3 @@ export const useAuth = (): AuthContextType => {
   }
   return context;
 };
-

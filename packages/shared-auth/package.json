@@ -7,10 +7,8 @@
   "dependencies": {
     "@satark/shared-types": "*",
     "@satark/shared-api": "*",
-    "@supabase/supabase-js": "^2.118.0",
     "react": "^18.3.1",
     "react-router-dom": "^6.28.0",
     "lucide-react": "^0.468.0"
   }
 }
-

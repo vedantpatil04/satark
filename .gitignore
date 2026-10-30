@@ -9,10 +9,16 @@ build/
 
 # Environment variables
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+*.env
+*.env.*
+*.backup*
+.env.backup.*
+!.env.example
+!apps/student-portal/.env.example
+!apps/teacher-portal/.env.example
+!backend/.env.example
+!desktop-agent/.env.example
 
 # Logs
 npm-debug.log*
@@ -66,7 +72,20 @@ ENV/
 *.sqlite3
 *.db
 *.db.*
+*.db-*
 *.db.backup*
+data/pids.json
+data/*.log
+storage/evidence/*
+storage/uploads/*
+storage/exports/*
+!storage/evidence/.gitkeep
+!storage/uploads/.gitkeep
+!storage/exports/.gitkeep
+
+# TLS / SSL Private Keys
+*.key
+certs/*.key
 
 # Misc
 *.swp

@@ -39,25 +39,11 @@ def get_current_user(
     
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        if payload.get("is_supabase"):
-            # Auto-sync user from verified Supabase token
-            user = User(
-                id=user_id,
-                email=payload.get("email") or f"{user_id}@supabase.user",
-                hashed_password="SUPABASE_MANAGED_AUTH",
-                full_name=payload.get("full_name") or "Supabase User",
-                role=payload.get("role", "student"),
-                is_active=True
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     if not user.is_active:
         raise HTTPException(

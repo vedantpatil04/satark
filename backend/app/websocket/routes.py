@@ -55,7 +55,15 @@ async def websocket_teacher_endpoint(
                 msg_type = data.get("type")
                 if msg_type == "ping":
                     await websocket.send_text(json.dumps({"type": "pong", "time": datetime.now(timezone.utc).isoformat()}))
-                elif msg_type in ("screen_share_request", "webrtc_offer", "ice_candidate", "screen_share_stopped"):
+                elif msg_type in (
+                    "screen_share_request",
+                    "screen_share_accepted",
+                    "screen_share_rejected",
+                    "screen_share_stopped",
+                    "webrtc_offer",
+                    "webrtc_answer",
+                    "ice_candidate"
+                ):
                     # WebRTC Signaling from Teacher to Student
                     target_student = data.get("student_id") or data.get("target_user_id")
                     if target_student:
@@ -105,7 +113,14 @@ async def websocket_student_endpoint(
                 data = json.loads(raw_text)
                 if data.get("type") == "ping":
                     await websocket.send_text(json.dumps({"type": "pong", "time": datetime.now(timezone.utc).isoformat()}))
-                elif data.get("type") in ("screen_share_accepted", "screen_share_rejected", "screen_share_stopped", "webrtc_answer", "ice_candidate"):
+                elif data.get("type") in (
+                    "screen_share_accepted",
+                    "screen_share_rejected",
+                    "screen_share_stopped",
+                    "webrtc_offer",
+                    "webrtc_answer",
+                    "ice_candidate"
+                ):
                     # WebRTC Signaling from Student to Teacher
                     target_teacher = data.get("teacher_id") or data.get("target_user_id")
                     if target_teacher:

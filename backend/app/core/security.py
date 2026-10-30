@@ -2,24 +2,18 @@ import time
 import secrets
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Set
 import jwt
-from jwt import PyJWKClient
 import bcrypt
 from backend.app.core.config import settings
 
 logger = logging.getLogger("security")
 
-# Supabase Asymmetric JWKS Client
-try:
-    _supabase_jwks_client = PyJWKClient(settings.SUPABASE_JWKS_URL)
-except Exception as e:
-    logger.warning(f"Could not initialize Supabase JWKS client: {e}")
-    _supabase_jwks_client = None
-
 # In-memory single-use WebSocket ticket storage: { ticket: { user_id, role, channel, expires_at } }
 _ws_ticket_store: Dict[str, Dict[str, Any]] = {}
 _pairing_code_store: Dict[str, Dict[str, Any]] = {}
+# Revoked tokens set (subject or jti with timestamp):
+_revoked_tokens: Set[str] = set()
 
 
 def generate_pairing_code(student_id: str, expires_seconds: int = 600) -> str:
@@ -95,16 +89,23 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
-def create_access_token(subject: Any, role: str, extra_data: Optional[Dict[str, Any]] = None, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    subject: Any,
+    role: str,
+    extra_data: Optional[Dict[str, Any]] = None,
+    expires_delta: Optional[timedelta] = None
+) -> str:
     now = datetime.now(timezone.utc)
     if expires_delta:
         expire = now + expires_delta
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
+    jti = secrets.token_hex(16)
     to_encode = {
         "sub": str(subject),
         "role": str(role),
+        "jti": jti,
         "iat": now,
         "exp": expire
     }
@@ -121,53 +122,34 @@ def create_access_token(subject: Any, role: str, extra_data: Optional[Dict[str, 
     return encoded_jwt
 
 
-def decode_supabase_jwks_token(token: str) -> Optional[Dict[str, Any]]:
-    """
-    Validates asymmetric ES256/RS256 JWT tokens issued by Supabase Auth using live JWKS.
-    """
-    if not _supabase_jwks_client:
-        return None
+def revoke_token(token: str) -> bool:
+    """Adds a token's JTI to the revoked blacklist."""
     try:
-        header = jwt.get_unverified_header(token)
-        # If token was signed with Supabase JWKS (ES256/RS256 with kid)
-        if header.get("kid") or header.get("alg") in ("ES256", "RS256"):
-            signing_key = _supabase_jwks_client.get_signing_key_from_jwt(token)
-            payload = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["ES256", "RS256"],
-                audience="authenticated",
-                options={"verify_exp": True}
-            )
-            # Map Supabase claims
-            user_metadata = payload.get("user_metadata", {})
-            return {
-                "sub": payload.get("sub"),
-                "email": payload.get("email"),
-                "role": user_metadata.get("role", "student"),
-                "full_name": user_metadata.get("full_name") or user_metadata.get("name") or payload.get("email"),
-                "is_supabase": True,
-                "aud": payload.get("aud")
-            }
-    except Exception as e:
-        logger.debug(f"Supabase JWKS token decode skipped/failed: {e}")
-    return None
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            options={"verify_exp": False}
+        )
+        jti = payload.get("jti")
+        if jti:
+            _revoked_tokens.add(jti)
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     """
-    Decodes tokens:
-    1. First checks Supabase Auth asymmetric JWKS (ES256/RS256).
-    2. Falls back to device agent scoped HMAC tokens and local auth tokens.
+    Decodes and validates purely local HS256 HMAC access tokens.
+    Rejects expired and revoked tokens.
     """
-    # 1. Try Supabase JWKS token
-    supabase_payload = decode_supabase_jwks_token(token)
-    if supabase_payload:
-        return supabase_payload
-
-    # 2. Fall back to local HMAC / Device agent token
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        jti = payload.get("jti")
+        if jti and jti in _revoked_tokens:
+            return None
         return payload
     except jwt.PyJWTError:
         return None
@@ -212,4 +194,3 @@ def _cleanup_expired_tickets():
     expired_keys = [k for k, v in _ws_ticket_store.items() if v["expires_at"] < now]
     for k in expired_keys:
         _ws_ticket_store.pop(k, None)
-

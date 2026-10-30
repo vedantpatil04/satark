@@ -2,15 +2,17 @@ import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { authApi } from "@/api/auth";
-import { GraduationCap, KeyRound, Loader2, Lock, Mail, User, ShieldCheck } from "lucide-react";
+import { GraduationCap, KeyRound, Loader2, Lock, Mail, User, ShieldCheck, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { ServerConfigModal } from "@/components/ServerConfigModal";
 
 export const TeacherLogin: React.FC = () => {
   const [isRegister, setIsRegister] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showServerConfig, setShowServerConfig] = useState(false);
 
   // Form fields
   const [email, setEmail] = useState("");
@@ -177,8 +179,20 @@ export const TeacherLogin: React.FC = () => {
           <Link to="/student/login" className="text-xs text-muted-foreground hover:text-foreground">
             Are you a student? Switch to <span className="underline">Student Portal</span>
           </Link>
+          <button
+            type="button"
+            onClick={() => setShowServerConfig(true)}
+            className="text-xs text-muted-foreground hover:text-primary mt-1 inline-flex items-center justify-center gap-1.5"
+          >
+            <Server className="w-3.5 h-3.5" /> Configure LAN Server Connection
+          </button>
         </div>
       </div>
+
+      <ServerConfigModal
+        isOpen={showServerConfig}
+        onClose={() => setShowServerConfig(false)}
+      />
     </div>
   );
 };

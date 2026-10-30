@@ -11,7 +11,6 @@ export default defineConfig({
       "@/components/ui": path.resolve(__dirname, "../../packages/shared-ui/src/components"),
       "@/context/AuthContext": path.resolve(__dirname, "../../packages/shared-auth/src/AuthContext"),
       "@/components/auth/ProtectedRoute": path.resolve(__dirname, "../../packages/shared-auth/src/ProtectedRoute"),
-      "@/lib/supabase": path.resolve(__dirname, "../../packages/shared-auth/src/supabase"),
       "@/lib/utils": path.resolve(__dirname, "../../packages/shared-ui/src/utils"),
       "@/types": path.resolve(__dirname, "../../packages/shared-types/src/index"),
       "@satark/shared-types": path.resolve(__dirname, "../../packages/shared-types/src"),
@@ -22,7 +21,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: "0.0.0.0",
     port: 5173,
   },
 });
-

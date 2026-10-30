@@ -48,7 +48,7 @@ const PROC_HEIGHT = 240;
 // Frame rate: 300ms delay between frames (~3.3 FPS)
 const FRAME_INTERVAL_MS = 300;
 
-// Structured Timestamped Logger
+// Structured Timestamped Logger with elapsed tracking
 const logStep = (step: string, details?: any) => {
   const ts = new Date().toISOString().split("T")[1].replace("Z", "");
   console.log(`[SATARK AI VISION | ${ts}] [${step}]`, details ?? "");
@@ -75,6 +75,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
   const isInitializedRef = useRef<boolean>(false);
   const isDetectingRef = useRef<boolean>(false);
   const isProcessingFrameRef = useRef<boolean>(false);
+  const initSessionIdRef = useRef<number>(0);
 
   // DOM & Media Refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -133,64 +134,147 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
     onStatusChangeRef.current?.(status);
   }, []);
 
-  // 1. Load OpenCV.js with fast resolution & timeout protection
+  // 1. Load OpenCV.js with fast resolution, timeout protection, and thenable recursion fix
   const loadOpenCv = useCallback((): Promise<any> => {
     return new Promise((resolve, reject) => {
+      const cvStart = performance.now();
+      const timeoutMs = 15000;
+
+      // Helper to finalize and resolve OpenCV without thenable trap
+      const finalizeCv = () => {
+        const cv = window.cv;
+        if (!cv || !cv.Mat || !cv.CascadeClassifier) {
+          return false;
+        }
+
+        // CRITICAL ROOT-CAUSE FIX:
+        // In Emscripten OpenCV, Module['then'] exists which causes an infinite microtask
+        // recursion when resolved via Promise resolution procedure.
+        // We delete .then once OpenCV is ready so resolve(cv) treats it as a standard object.
+        try {
+          if (typeof cv.then === "function") {
+            delete cv.then;
+          }
+        } catch (e) {
+          console.warn("[FocusDetection] Notice: cv.then delete:", e);
+        }
+
+        logStep("OPENCV_INITIALIZATION_RESOLVED", {
+          durationMs: Math.round(performance.now() - cvStart),
+        });
+        resolve(cv);
+        return true;
+      };
+
       // If already initialized in window, resolve immediately
-      if (window.cv && window.cv.Mat && window.cv.CascadeClassifier) {
-        return resolve(window.cv);
+      if (finalizeCv()) {
+        return;
       }
 
       // Check if script tag exists
       let script = document.querySelector(`script[src*="opencv.js"]`) as HTMLScriptElement;
       if (!script) {
+        logStep("OPENCV_INJECTING_SCRIPT_TAG");
         script = document.createElement("script");
         script.src = "/opencv.js";
         script.async = true;
         script.type = "text/javascript";
+        script.onerror = () => {
+          clearInterval(interval);
+          clearTimeout(timeoutId);
+          reject(new Error("Failed to load /opencv.js from server (network error or file missing)."));
+        };
         document.body.appendChild(script);
       }
 
-      const startTime = Date.now();
-      const timeoutMs = 15000;
+      // Attach to onRuntimeInitialized if cv object exists
+      if (window.cv && typeof window.cv === "object") {
+        const prevInit = window.cv.onRuntimeInitialized;
+        window.cv.onRuntimeInitialized = () => {
+          if (typeof prevInit === "function") {
+            try {
+              prevInit();
+            } catch (e) {}
+          }
+          finalizeCv();
+        };
+      }
 
+      // Polling interval with 15-second individual timeout
       const interval = setInterval(() => {
         if (!isMountedRef.current) {
           clearInterval(interval);
+          clearTimeout(timeoutId);
           return;
         }
 
-        if (window.cv && window.cv.Mat && window.cv.CascadeClassifier) {
+        if (finalizeCv()) {
           clearInterval(interval);
-          resolve(window.cv);
-        } else if (Date.now() - startTime > timeoutMs) {
-          clearInterval(interval);
-          reject(new Error("OpenCV WebAssembly engine timed out during load."));
+          clearTimeout(timeoutId);
         }
       }, 100);
+
+      const timeoutId = setTimeout(() => {
+        clearInterval(interval);
+        reject(
+          new Error("OpenCV WebAssembly engine timed out during load (15s limit reached).")
+        );
+      }, timeoutMs);
     });
   }, []);
 
-  // 2. Load model XML into OpenCV virtual filesystem safely
-  const loadFileToOpenCV = async (url: string, path: string) => {
+  // 2. Load model XML into OpenCV virtual filesystem safely with fallback paths & 404 detection
+  const loadFileToOpenCV = async (primaryUrl: string, fallbackUrl: string, filename: string): Promise<void> => {
     const cv = window.cv;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to load ${path} (HTTP ${response.status})`);
+    if (!cv || !cv.FS_createDataFile) {
+      throw new Error("OpenCV virtual filesystem is not available in memory.");
     }
+
+    const fetchStart = performance.now();
+    let response: Response;
+    try {
+      response = await fetch(primaryUrl);
+      if (!response.ok && fallbackUrl) {
+        logStep("CASCADE_FALLBACK_ATTEMPT", { primaryUrl, fallbackUrl, status: response.status });
+        response = await fetch(fallbackUrl);
+      }
+    } catch (networkErr: any) {
+      if (fallbackUrl) {
+        response = await fetch(fallbackUrl);
+      } else {
+        throw new Error(`Network failure loading ${filename}: ${networkErr?.message || networkErr}`);
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to load ${filename} (HTTP ${response.status}). Model file not found on server.`);
+    }
+
     const buffer = await response.arrayBuffer();
+    if (!buffer || buffer.byteLength === 0) {
+      throw new Error(`Downloaded model ${filename} was empty (0 bytes).`);
+    }
+
     const data = new Uint8Array(buffer);
 
     try {
-      cv.FS_unlink("/" + path);
+      cv.FS_unlink("/" + filename);
     } catch {
       // Ignored if file does not exist yet
     }
-    cv.FS_createDataFile("/", path, data, true, false, false);
+    cv.FS_createDataFile("/", filename, data, true, false, false);
+    logStep("CASCADE_VFS_FILE_CREATED", {
+      filename,
+      bytes: buffer.byteLength,
+      durationMs: Math.round(performance.now() - fetchStart),
+    });
   };
 
   // 3. Stop detection and cleanly release camera stream, timers, and OpenCV memory
   const stopVisionPipeline = useCallback((reason: string = "explicit") => {
+    // Invalidate any in-flight initialization sessions
+    initSessionIdRef.current += 1;
+
     const hadActiveResources =
       isDetectingRef.current || isInitializingRef.current || streamRef.current !== null;
 
@@ -460,31 +544,31 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
     detect();
   }, []);
 
-  // 5. Explicit "Start AI Vision" Pipeline with Immediate State Updates and Robust Video Binding
+  // 5. Explicit "Start AI Vision" Pipeline with Strict Concurrency & Microtask Loop Prevention
   const startVisionPipeline = useCallback(async () => {
     if (isInitializingRef.current || isDetectingRef.current) {
       logStep("CAMERA_REQUEST_IGNORED", "Already initializing or active");
       return;
     }
     isInitializingRef.current = true;
+    const currentSessionId = ++initSessionIdRef.current;
+    const initStart = performance.now();
 
-    logStep("CAMERA_REQUEST_STARTED", "Invoking navigator.mediaDevices.getUserMedia()");
+    logStep("CAMERA_REQUEST_STARTED", { sessionId: currentSessionId });
     updateStatus("loading", "Step 1/3: Requesting webcam access...");
 
-    // 15-Second Hard Timeout Guard
+    // Overall Safety Timeout Ceiling (45 seconds)
     initTimeoutRef.current = setTimeout(() => {
-      if (isInitializingRef.current) {
-        logStep("INITIALIZATION_TIMEOUT", "Camera or model initialization exceeded 15 seconds");
+      if (isInitializingRef.current && initSessionIdRef.current === currentSessionId) {
+        logStep("INITIALIZATION_TIMEOUT", "AI pipeline overall duration exceeded 45 seconds");
         stopVisionPipeline();
         updateStatus(
           "error",
           undefined,
-          "Camera or AI model initialization timed out (15s). Please ensure camera is connected and allowed, then click Retry."
+          "AI Vision Engine initialization timed out. Please verify your camera is connected and unblocked, then click Retry."
         );
       }
-    }, 15000);
-
-    const initStart = performance.now();
+    }, 45000);
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -493,13 +577,23 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         );
       }
 
-      // 1. Acquire MediaStream
+      // Step 1: Acquire MediaStream
+      const cameraStart = performance.now();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
         audio: false,
       });
 
-      logStep("CAMERA_REQUEST_RESOLVED", { tracks: stream.getVideoTracks().length });
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      logStep("CAMERA_REQUEST_RESOLVED", {
+        tracks: stream.getVideoTracks().length,
+        durationMs: Math.round(performance.now() - cameraStart),
+      });
 
       const videoTrack = stream.getVideoTracks()[0];
       if (!videoTrack || videoTrack.readyState !== "live") {
@@ -511,18 +605,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         enabled: videoTrack.enabled,
       });
 
-      // 2. IMMEDIATELY advance UI stage so user is never stuck looking at Step 1/3
-      updateStatus("loading", "Step 2/3: Initializing AI Vision Engine...");
-
-      if (!isMountedRef.current) {
-        logStep("CAMERA_ABORT_UNMOUNTED", "Component was unmounted before binding");
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-
       streamRef.current = stream;
 
-      // 3. Bind stream to mounted video element
+      // Step 2: Bind stream to mounted video element
       const video = videoRef.current;
       if (!video) {
         throw new Error("Video element DOM reference was not found.");
@@ -531,120 +616,181 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
 
       video.srcObject = stream;
       video.muted = true;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "true");
       logStep("VIDEO_SRC_OBJECT_ASSIGNED");
 
-      // 4. Ensure video is actively playing with safety fallback
-      await new Promise<void>((resolve) => {
+      // Step 3: Wait for video element readiness (HAVE_ENOUGH_DATA)
+      updateStatus("loading", "Step 2/3: Binding camera feed (HAVE_ENOUGH_DATA)...");
+      const videoWaitStart = performance.now();
+
+      await new Promise<void>((resolve, reject) => {
         let isDone = false;
-        const completeVideoPlay = (reason: string) => {
+        const videoTimeout = setTimeout(() => {
           if (!isDone) {
             isDone = true;
+            cleanup();
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+              logStep("VIDEO_PLAY_TIMEOUT_PROCEED", {
+                readyState: video.readyState,
+                videoWidth: video.videoWidth,
+                videoHeight: video.videoHeight,
+              });
+              resolve();
+            } else {
+              reject(new Error("Webcam feed timed out waiting for active video data (HAVE_ENOUGH_DATA)."));
+            }
+          }
+        }, 8000);
+
+        const cleanup = () => {
+          clearTimeout(videoTimeout);
+          video.removeEventListener("loadeddata", onDataReady);
+          video.removeEventListener("canplay", onDataReady);
+          video.removeEventListener("playing", onDataReady);
+        };
+
+        const onDataReady = () => {
+          if (!isDone && video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+            isDone = true;
+            cleanup();
             logStep("VIDEO_PLAY_SUCCESS", {
-              reason,
               readyState: video.readyState,
               videoWidth: video.videoWidth,
               videoHeight: video.videoHeight,
+              durationMs: Math.round(performance.now() - videoWaitStart),
             });
             resolve();
           }
         };
 
-        const attemptPlay = () => {
-          video
-            .play()
-            .then(() => completeVideoPlay("play_promise_resolved"))
-            .catch((playErr) => {
-              console.warn("[FocusDetection] Play promise warning:", playErr);
-              completeVideoPlay("play_catch_fallback");
-            });
-        };
+        video.addEventListener("loadeddata", onDataReady);
+        video.addEventListener("canplay", onDataReady);
+        video.addEventListener("playing", onDataReady);
 
-        if (video.readyState >= 2 && video.videoWidth > 0) {
-          logStep("VIDEO_METADATA_READY", {
-            readyState: video.readyState,
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-          });
-          attemptPlay();
-        } else {
-          const onMetadata = () => {
-            logStep("VIDEO_METADATA_READY", {
-              readyState: video.readyState,
-              videoWidth: video.videoWidth,
-              videoHeight: video.videoHeight,
-            });
-            video.removeEventListener("loadedmetadata", onMetadata);
-            video.removeEventListener("canplay", onMetadata);
-            attemptPlay();
-          };
+        video.play().catch((playErr) => {
+          console.warn("[FocusDetection] video.play() warning:", playErr);
+        });
 
-          video.addEventListener("loadedmetadata", onMetadata, { once: true });
-          video.addEventListener("canplay", onMetadata, { once: true });
-
-          // Also trigger play right away
-          attemptPlay();
-
-          // Maximum 1.5s timeout: proceed regardless so we never stall
-          setTimeout(() => completeVideoPlay("timeout_fallback"), 1500);
+        if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+          onDataReady();
         }
       });
 
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
+
       logStep("CAMERA_PREVIEW_READY");
 
-      // 5. Load OpenCV WebAssembly
+      // Step 4: Load OpenCV WebAssembly Runtime (with microtask recursion fix)
       logStep("OPENCV_INITIALIZATION_STARTED");
-      updateStatus("loading", "Step 2/3: Loading OpenCV WebAssembly...");
+      updateStatus("loading", "Step 2/3: Loading OpenCV WebAssembly runtime...");
       const cvStart = performance.now();
       const cv = await loadOpenCv();
+
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
       logStep("OPENCV_INITIALIZATION_RESOLVED", { durationMs: Math.round(performance.now() - cvStart) });
 
-      // 6. Load Haar Cascades
+      // Step 5: Load Haar Cascades into OpenCV Virtual Filesystem
       logStep("CASCADE_INITIALIZATION_STARTED");
-      updateStatus("loading", "Step 2/3: Loading Haar Cascades...");
+      updateStatus("loading", "Step 2/3: Loading Haar Cascade face & eye models...");
       const cascadeStart = performance.now();
-      await loadFileToOpenCV("/models/haarcascade_frontalface_default.xml", "haarcascade_frontalface_default.xml");
-      await loadFileToOpenCV("/models/haarcascade_eye.xml", "haarcascade_eye.xml");
 
-      if (!faceCascadeRef.current) faceCascadeRef.current = new cv.CascadeClassifier();
-      faceCascadeRef.current.load("haarcascade_frontalface_default.xml");
+      await loadFileToOpenCV(
+        "/models/haarcascade_frontalface_default.xml",
+        "/model/haarcascade_frontalface_default.xml",
+        "haarcascade_frontalface_default.xml"
+      );
+      await loadFileToOpenCV(
+        "/models/haarcascade_eye.xml",
+        "/model/haarcascade_eye.xml",
+        "haarcascade_eye.xml"
+      );
 
-      if (!eyeCascadeRef.current) eyeCascadeRef.current = new cv.CascadeClassifier();
-      eyeCascadeRef.current.load("haarcascade_eye.xml");
-      logStep("CASCADE_INITIALIZATION_RESOLVED", { durationMs: Math.round(performance.now() - cascadeStart) });
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
 
-      // 7. Load Teachable Machine Posture Model (Graceful fallback)
+      // Initialize Face Classifier
+      if (!faceCascadeRef.current) {
+        faceCascadeRef.current = new cv.CascadeClassifier();
+      }
+      const faceLoaded = faceCascadeRef.current.load("haarcascade_frontalface_default.xml");
+      if (!faceLoaded || faceCascadeRef.current.empty()) {
+        throw new Error("Face detection classifier failed to compile from XML into OpenCV memory.");
+      }
+
+      // Initialize Eye Classifier
+      if (!eyeCascadeRef.current) {
+        eyeCascadeRef.current = new cv.CascadeClassifier();
+      }
+      const eyeLoaded = eyeCascadeRef.current.load("haarcascade_eye.xml");
+      if (!eyeLoaded || eyeCascadeRef.current.empty()) {
+        throw new Error("Eye detection classifier failed to compile from XML into OpenCV memory.");
+      }
+
+      logStep("CASCADE_INITIALIZATION_RESOLVED", {
+        durationMs: Math.round(performance.now() - cascadeStart),
+      });
+
+      // Step 6: Load Teachable Machine Posture Model (Graceful fallback with 15s timeout)
       updateStatus("loading", "Step 3/3: Initializing Posture Model...");
       try {
         const tmStart = performance.now();
         const modelURL = window.location.origin + "/models/model.json";
         const metadataURL = window.location.origin + "/models/metadata.json";
-        const tmModel = await tmImage.load(modelURL, metadataURL);
-        tmModelRef.current = tmModel;
-        logStep("TM_MODEL_INITIALIZATION_RESOLVED", { durationMs: Math.round(performance.now() - tmStart) });
-      } catch (tmErr) {
-        console.warn("[FocusDetection] TM model load skipped, continuing with Haar Cascades:", tmErr);
+
+        const loadTmWithTimeout = Promise.race([
+          tmImage.load(modelURL, metadataURL),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Posture model loading exceeded 15s timeout")), 15000)
+          ),
+        ]);
+
+        const tmModel = await loadTmWithTimeout;
+        if (isMountedRef.current && initSessionIdRef.current === currentSessionId) {
+          tmModelRef.current = tmModel;
+          logStep("TM_MODEL_INITIALIZATION_RESOLVED", {
+            durationMs: Math.round(performance.now() - tmStart),
+          });
+        }
+      } catch (tmErr: any) {
+        logStep("TM_MODEL_LOAD_SKIPPED", { reason: tmErr?.message });
+        console.warn("[FocusDetection] Posture model load skipped, continuing with Haar Cascades:", tmErr);
+        tmModelRef.current = null;
       }
 
-      // Success: Clear 15-second timeout and start detection loop
+      // Final StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
+
+      // Success: Clear timeout ceiling and activate detection loop
       if (initTimeoutRef.current) {
         clearTimeout(initTimeoutRef.current);
         initTimeoutRef.current = null;
       }
 
-      if (isMountedRef.current) {
-        isInitializedRef.current = true;
-        isInitializingRef.current = false;
-        logStep("DETECTION_LOOP_STARTED", { totalInitDurationMs: Math.round(performance.now() - initStart) });
-        updateStatus("detecting");
-        startDetectionLoop();
-      }
+      isInitializedRef.current = true;
+      isInitializingRef.current = false;
+      logStep("DETECTION_LOOP_STARTED", {
+        totalInitDurationMs: Math.round(performance.now() - initStart),
+      });
+      updateStatus("detecting");
+      startDetectionLoop();
     } catch (err: any) {
       if (initTimeoutRef.current) {
         clearTimeout(initTimeoutRef.current);
         initTimeoutRef.current = null;
       }
       isInitializingRef.current = false;
-      stopVisionPipeline();
+      stopVisionPipeline("init_error");
 
       logStep("INITIALIZATION_FAILED", { message: err?.message, name: err?.name });
       console.error("[FocusDetection] Initialization error:", err);
@@ -713,7 +859,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
           </div>
         )}
 
-        {/* 2. LOADING STATE: Progressive Status Spinner with Cancel Button */}
+        {/* 2. LOADING STATE: Progressive Status Spinner with Sub-Stage Text & Cancel Button */}
         {focusState.status === "loading" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm p-6 text-center space-y-3 z-10">
             <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin" />
@@ -726,7 +872,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={stopVisionPipeline}
+              onClick={() => stopVisionPipeline("user_cancel")}
               className="text-xs border-white/20 hover:bg-white/10 text-muted-foreground mt-1"
             >
               Cancel
@@ -798,7 +944,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={stopVisionPipeline}
+                onClick={() => stopVisionPipeline("user_dismiss")}
                 className="text-xs h-7 text-muted-foreground hover:bg-destructive/10"
               >
                 Dismiss
@@ -864,7 +1010,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={stopVisionPipeline}
+              onClick={() => stopVisionPipeline("user_stop")}
               className="gap-1.5 text-xs h-7 border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
             >
               <CameraOff className="w-3.5 h-3.5" />

@@ -1,9 +1,10 @@
 # Database Schema Specification
 
-**Project**: Smart Classroom – Exam Integrity & Focus Management System  
-**Database Engine**: Supabase Managed PostgreSQL (Production) with local SQLite compatibility fallback  
+**Project**: SATARK – Smart Classroom Integrity & Focus Management Platform  
+**Database Engine**: Central Local SQLite (`data/satark.db`) with WAL mode (`PRAGMA journal_mode=WAL;`), foreign keys enforced (`PRAGMA foreign_keys=ON;`), and 5000ms busy timeout  
 **ORM**: SQLAlchemy 2.0 (Declarative Base) with Pydantic v2 validation  
-**Roles**: Strictly `teacher` (administrative) and `student` (learner)  
+**Compatibility View**: `CREATE VIEW IF NOT EXISTS profiles AS SELECT * FROM users;`  
+**Roles**: Strictly `teacher` (administrative authority) and `student` (learner)  
 
 ---
 

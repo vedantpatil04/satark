@@ -323,6 +323,7 @@ export interface MonitoringOverview {
   actual_start?: string | null;
   room_name: string;
   is_livekit_configured: boolean;
+  is_webrtc_configured?: boolean;
   total_enrolled: number;
   connected_count: number;
   active_streamers: number;

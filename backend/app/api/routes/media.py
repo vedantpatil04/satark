@@ -12,7 +12,7 @@ from backend.app.schemas import (
     LiveKitTokenRequest, LiveKitTokenResponse, MediaShareStatusResponse
 )
 from backend.app.services.audit_service import log_action
-from backend.app.services.livekit_service import generate_livekit_token, is_livekit_configured
+from backend.app.services.webrtc_service import generate_webrtc_session_config, is_webrtc_available
 from backend.app.websocket.manager import ws_manager
 
 router = APIRouter(prefix="/media", tags=["Live WebRTC & Monitoring"])
@@ -97,7 +97,7 @@ def get_media_token(
         db.add(participant)
     db.commit()
 
-    token_data = generate_livekit_token(
+    token_data = generate_webrtc_session_config(
         user_id=current_user.id,
         user_name=current_user.full_name,
         role=current_user.role,
@@ -235,7 +235,8 @@ def get_monitoring_overview(
         "duration_minutes": exam.duration_minutes,
         "actual_start": exam.actual_start.isoformat() if exam.actual_start else None,
         "room_name": media_session.room_name,
-        "is_livekit_configured": is_livekit_configured(),
+        "is_livekit_configured": False,
+        "is_webrtc_configured": is_webrtc_available(),
         "total_enrolled": len(enrollments),
         "connected_count": connected_count,
         "active_streamers": sharing_count,

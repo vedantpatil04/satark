@@ -572,7 +572,9 @@ class LiveKitTokenResponse(BaseModel):
     role: str
     can_publish: bool
     can_subscribe: bool
-    expires_in: int
+    expires_in: int = 7200
+    webrtc_mode: Optional[str] = "native_p2p_star"
+    ice_servers: Optional[List[Dict[str, Any]]] = None
 
 
 class MediaShareActionRequest(BaseModel):

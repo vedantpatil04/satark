@@ -20,12 +20,12 @@ class Settings(BaseSettings):
     BACKEND_PORT: int = 8000
 
     # Database
-    DATABASE_URL: str = "sqlite:///./smart_classroom.db"
+    DATABASE_URL: str = "sqlite:///./data/satark.db"
 
     # JWT & Security
-    SECRET_KEY: str = "dev-secret-key-change-in-production-smart-classroom-2026"
+    SECRET_KEY: str = "satark-local-jwt-secret-key-32bytes-secure-2026"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours for testing
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours for local LAN testing
     WS_TICKET_EXPIRE_SECONDS: int = 60      # Short-lived ticket for WebSockets
 
     # Controlled Teacher Account Provisioning Key
@@ -35,26 +35,11 @@ class Settings(BaseSettings):
     # Supported Roles: strictly 'teacher' and 'student'
     VALID_ROLES: List[str] = ["teacher", "student"]
 
-    # Supabase Cloud Configuration
-    SUPABASE_URL: str = "https://ugsizlimcnxtbzkwficf.supabase.co"
-    SUPABASE_SECRET_KEY: Union[str, None] = None
-    SUPABASE_JWKS_URL: str = "https://ugsizlimcnxtbzkwficf.supabase.co/auth/v1/.well-known/jwks.json"
+    # Local Media & Evidence Storage Directory
+    LOCAL_STORAGE_DIR: str = "./storage"
 
-    # Cloudinary Evidence Storage Configuration
-    CLOUDINARY_CLOUD_NAME: Union[str, None] = None
-    CLOUDINARY_API_KEY: Union[str, None] = None
-    CLOUDINARY_API_SECRET: Union[str, None] = None
-
-    # WebRTC STUN/TURN Configuration
+    # WebRTC STUN Configuration (LAN fallback)
     WEBRTC_STUN_URLS: List[str] = ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]
-    WEBRTC_TURN_URL: Union[str, None] = None
-    WEBRTC_TURN_USERNAME: Union[str, None] = None
-    WEBRTC_TURN_CREDENTIAL: Union[str, None] = None
-
-    # LiveKit WebRTC SFU Media Server Configuration
-    LIVEKIT_URL: Union[str, None] = None
-    LIVEKIT_API_KEY: Union[str, None] = None
-    LIVEKIT_API_SECRET: Union[str, None] = None
 
     # CORS
     CORS_ORIGINS: Union[List[str], str] = [

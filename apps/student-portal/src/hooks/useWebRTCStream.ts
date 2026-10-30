@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { Room, Track } from "livekit-client";
 import { mediaApi } from "@satark/shared-api";
 
 interface UseWebRTCStreamOptions {
@@ -31,18 +30,9 @@ export function useWebRTCStream({ role, sendMessage, lastMessage, examId }: UseW
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const livekitRoomRef = useRef<Room | null>(null);
 
-  // Clean up peer connection, LiveKit room & media tracks
+  // Clean up peer connection & local media tracks
   const cleanup = useCallback(() => {
-    if (livekitRoomRef.current) {
-      try {
-        livekitRoomRef.current.disconnect();
-      } catch (e) {
-        console.warn("Error disconnecting LiveKit room:", e);
-      }
-      livekitRoomRef.current = null;
-    }
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
@@ -58,7 +48,7 @@ export function useWebRTCStream({ role, sendMessage, lastMessage, examId }: UseW
     setIncomingRequest(null);
   }, []);
 
-  // Initialize RTCPeerConnection (P2P fallback)
+  // Initialize RTCPeerConnection for Native WebRTC
   const createPeerConnection = useCallback(
     (targetUserId: string, targetExamId?: string) => {
       if (pcRef.current) {
@@ -107,9 +97,13 @@ export function useWebRTCStream({ role, sendMessage, lastMessage, examId }: UseW
     const activeExamId = incomingRequest?.exam_id || examId;
 
     try {
-      // 1. Explicitly prompt browser display media selection
+      // 1. Explicitly prompt browser display media selection (Student must choose screen)
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: "monitor" },
+        video: {
+          displaySurface: "monitor",
+          width: { max: 1280 },
+          frameRate: { max: 15 }
+        },
         audio: false,
       });
 
@@ -118,7 +112,7 @@ export function useWebRTCStream({ role, sendMessage, lastMessage, examId }: UseW
       if (teacher_id) setActivePeerId(teacher_id);
       setIncomingRequest(null);
 
-      // Handle user clicking native browser "Stop sharing" bar
+      // Handle user clicking native browser "Stop sharing" floating bar
       stream.getVideoTracks()[0].onended = () => {
         stopScreenShare(teacher_id, activeExamId);
       };
@@ -128,38 +122,12 @@ export function useWebRTCStream({ role, sendMessage, lastMessage, examId }: UseW
         await mediaApi.respondToShare(activeExamId, true).catch((e) => {
           console.warn("Failed to record share response in backend:", e);
         });
-      }
-
-      // 3. Connect to LiveKit SFU room if configured
-      if (activeExamId) {
-        try {
-          const tokenResp = await mediaApi.getToken(activeExamId, { can_publish: true });
-          if (tokenResp.is_configured && tokenResp.url && tokenResp.token) {
-            const room = new Room({
-              adaptiveStream: true,
-              dynacast: true,
-            });
-            livekitRoomRef.current = room;
-            await room.connect(tokenResp.url, tokenResp.token);
-            const videoTrack = stream.getVideoTracks()[0];
-            if (videoTrack) {
-              await room.localParticipant.publishTrack(videoTrack, {
-                name: "student_screen",
-                source: Track.Source.ScreenShare,
-              });
-            }
-          }
-        } catch (lkErr) {
-          console.warn("LiveKit publisher connection attempt notice:", lkErr);
-        }
-
-        // 4. Update server stream state so teacher live grid reflects active sharing
         await mediaApi.updateStreamState(activeExamId, true).catch((e) => {
           console.warn("Failed to update stream state:", e);
         });
       }
 
-      // 5. Establish P2P fallback signaling if teacher_id present
+      // 3. Establish Native P2P WebRTC Connection to Teacher
       if (teacher_id) {
         const pc = createPeerConnection(teacher_id, activeExamId);
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));

@@ -27,7 +27,8 @@
 | **2.6** | Phase 2 | **Android & Push Notification System (Capacitor Debug APK)** | **COMPLETED** | Stage 2.2, 2.5 | None |
 | **2.7** | Phase 2 | **Evidence, Reports & Compliance Export (CSV Export, Summaries)** | **COMPLETED** | Stage 2.4 | None |
 | **2.8** | Phase 2 | **Production Hardening & Final Evaluation Demo** | **COMPLETED** | All prior stages | None |
-| **2.9** | Phase 2 | **Supabase DB Migration & Monorepo Frontend Decoupling (`apps/teacher-portal`, `apps/student-portal`, `packages/*`)** | **COMPLETED** | Stage 2.8 | None |
+| **2.9** | Phase 2 | **Monorepo Frontend Decoupling (`apps/teacher-portal`, `apps/student-portal`, `packages/*`)** | **COMPLETED** | Stage 2.8 | None |
+| **2.10** | Phase 2 | **Complete Local LAN Deployment: Supabase/Cloudinary Removal, Central SQLite WAL DB, Zero Docker, Teacher-Centred Native WebRTC Star Topology** | **COMPLETED** | Stage 2.9 | None |
 
 ---
 

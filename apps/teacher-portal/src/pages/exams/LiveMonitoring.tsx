@@ -30,14 +30,12 @@ import {
   Volume2
 } from "lucide-react";
 import { toast } from "sonner";
-import { Room, RoomEvent, Track, RemoteTrack, RemoteTrackPublication, RemoteParticipant } from "livekit-client";
 import { examsApi, mediaApi, alertsApi } from "@satark/shared-api";
 import { useRealtimeSocket } from "@/hooks/useRealtimeSocket";
 import type {
   MonitoringOverview,
   StudentMonitoringCard,
-  ExamSession,
-  LiveKitTokenResponse
+  ExamSession
 } from "@satark/shared-types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -53,7 +51,6 @@ export const LiveMonitoring: React.FC = () => {
   const [overview, setOverview] = useState<MonitoringOverview | null>(null);
   const [exam, setExam] = useState<ExamSession | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [livekitToken, setLivekitToken] = useState<LiveKitTokenResponse | null>(null);
 
   // Search, Filters & View Mode
   const [searchQuery, setSearchQuery] = useState("");
@@ -78,9 +75,9 @@ export const LiveMonitoring: React.FC = () => {
   // Remaining Exam Time
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
 
-  // LiveKit Room & Tracks State
-  const roomRef = useRef<Room | null>(null);
-  const [subscribedTracks, setSubscribedTracks] = useState<Record<string, RemoteTrack>>({});
+  // Native WebRTC Peer Connections & Video Streams (Up to 5 concurrent streams)
+  const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const [studentStreams, setStudentStreams] = useState<Record<string, MediaStream>>({});
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
   // 1. Fetch initial overview & exam metadata
@@ -124,89 +121,116 @@ export const LiveMonitoring: React.FC = () => {
     return () => clearInterval(timer);
   }, [remainingSeconds, exam?.status]);
 
-  // 2. Connect to LiveKit Room
+  // Cleanup peer connections on unmount
   useEffect(() => {
-    if (!activeExamId) return;
-
-    let isCancelled = false;
-    const connectLiveKit = async () => {
-      try {
-        const tokenResp = await mediaApi.getToken(activeExamId);
-        if (isCancelled) return;
-        setLivekitToken(tokenResp);
-
-        if (!tokenResp.is_configured || !tokenResp.url) {
-          // LiveKit credentials not yet populated in .env
-          return;
-        }
-
-        const room = new Room({
-          adaptiveStream: true,
-          dynacast: true,
-        });
-        roomRef.current = room;
-
-        room.on(
-          RoomEvent.TrackSubscribed,
-          (track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) => {
-            if (track.kind === Track.Kind.Video) {
-              setSubscribedTracks((prev) => ({
-                ...prev,
-                [participant.identity]: track,
-              }));
-            }
-          }
-        );
-
-        room.on(
-          RoomEvent.TrackUnsubscribed,
-          (track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) => {
-            setSubscribedTracks((prev) => {
-              const copy = { ...prev };
-              delete copy[participant.identity];
-              return copy;
-            });
-          }
-        );
-
-        room.on(RoomEvent.Disconnected, () => {
-          setSubscribedTracks({});
-        });
-
-        await room.connect(tokenResp.url, tokenResp.token);
-      } catch (err: any) {
-        console.warn("LiveKit connection notice:", err);
-      }
-    };
-
-    connectLiveKit();
-
     return () => {
-      isCancelled = true;
-      if (roomRef.current) {
-        roomRef.current.disconnect();
-        roomRef.current = null;
-      }
+      peerConnections.current.forEach((pc) => pc.close());
+      peerConnections.current.clear();
+      setStudentStreams({});
     };
   }, [activeExamId]);
 
-  // 3. Attach subscribed tracks to corresponding video elements
+  // Attach MediaStreams to video elements
   useEffect(() => {
-    Object.entries(subscribedTracks).forEach(([identity, track]) => {
+    Object.entries(studentStreams).forEach(([identity, stream]) => {
       const el = videoRefs.current[identity];
-      if (el) {
-        track.attach(el);
+      if (el && el.srcObject !== stream) {
+        el.srcObject = stream;
       }
     });
-  }, [subscribedTracks, overview?.students, expandedStudentId]);
+  }, [studentStreams, overview?.students, expandedStudentId]);
 
-  // 4. Real-time WebSocket Listeners
-  useRealtimeSocket({
+  // 4. Real-time WebSocket Listeners & WebRTC Signaling
+  const { send: sendSocketMessage } = useRealtimeSocket({
     channel: "teacher",
-    onMessage: (msg) => {
+    onMessage: async (msg) => {
       if (msg.exam_id && msg.exam_id !== activeExamId) return;
 
-      if (msg.type === "student_stream_state") {
+      // WebRTC Offer from Student Screen Sharing
+      if (msg.type === "webrtc_offer") {
+        const studentId = msg.student_id || msg.sender_id;
+        if (!studentId) return;
+
+        try {
+          if (peerConnections.current.has(studentId)) {
+            peerConnections.current.get(studentId)?.close();
+          }
+
+          const pc = new RTCPeerConnection({
+            iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+          });
+          peerConnections.current.set(studentId, pc);
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              sendSocketMessage({
+                type: "ice_candidate",
+                target_user_id: studentId,
+                candidate: event.candidate,
+                exam_id: activeExamId,
+              });
+            }
+          };
+
+          pc.ontrack = (event) => {
+            if (event.streams && event.streams[0]) {
+              setStudentStreams((prev) => ({
+                ...prev,
+                [studentId]: event.streams[0],
+              }));
+            }
+          };
+
+          pc.onconnectionstatechange = () => {
+            if (
+              pc.connectionState === "disconnected" ||
+              pc.connectionState === "failed" ||
+              pc.connectionState === "closed"
+            ) {
+              setStudentStreams((prev) => {
+                const updated = { ...prev };
+                delete updated[studentId];
+                return updated;
+              });
+              peerConnections.current.delete(studentId);
+            }
+          };
+
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          sendSocketMessage({
+            type: "webrtc_answer",
+            target_user_id: studentId,
+            sdp: answer,
+            exam_id: activeExamId,
+          });
+        } catch (err) {
+          console.error("Error negotiating WebRTC answer for student:", studentId, err);
+        }
+      } else if (msg.type === "ice_candidate") {
+        const studentId = msg.student_id || msg.sender_id;
+        const pc = peerConnections.current.get(studentId);
+        if (pc && msg.candidate) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          } catch (e) {
+            console.warn("ICE candidate add notice:", e);
+          }
+        }
+      } else if (msg.type === "screen_share_stopped") {
+        const studentId = msg.student_id || msg.sender_id;
+        if (studentId && peerConnections.current.has(studentId)) {
+          peerConnections.current.get(studentId)?.close();
+          peerConnections.current.delete(studentId);
+        }
+        setStudentStreams((prev) => {
+          const updated = { ...prev };
+          delete updated[studentId];
+          return updated;
+        });
+      } else if (msg.type === "student_stream_state") {
         setOverview((prev) => {
           if (!prev) return prev;
           const updated = prev.students.map((st) => {
@@ -618,7 +642,7 @@ export const LiveMonitoring: React.FC = () => {
       ) : (
         <div className={`grid ${gridColsClass} gap-4`}>
           {displayedStudents.map((student) => {
-            const hasSubscribedTrack = Boolean(subscribedTracks[student.student_id]);
+            const hasActiveStream = Boolean(studentStreams[student.student_id]);
             const isOnline = student.connection_status === "connected";
             const hasAlerts = student.alert_count > 0;
 
@@ -797,8 +821,8 @@ export const LiveMonitoring: React.FC = () => {
                 {expandedStudent.is_sharing_screen ? (
                   <video
                     ref={(el) => {
-                      if (el && subscribedTracks[expandedStudent.student_id]) {
-                        subscribedTracks[expandedStudent.student_id].attach(el);
+                      if (el && studentStreams[expandedStudent.student_id]) {
+                        el.srcObject = studentStreams[expandedStudent.student_id];
                       }
                     }}
                     autoPlay

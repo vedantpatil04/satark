@@ -1,201 +1,146 @@
-# System Architecture: Smart Classroom Platform
+# SATARK System Architecture — Local LAN & Offline Specification
 
-**Project**: Smart Classroom – Exam Integrity & Focus Management System  
-**Stage**: Phase 1.1 / Phase 1.2 Architectural Specification  
-**Status**: Locked Architecture (Updated: Dual Portal & Role-Based Security)  
+**Team**: WEBFARM (Vedant Patil, Amol Khumbar, Om Mohite, Maruti Shinde)  
+**Project**: SATARK — Smart Classroom Integrity & Focus Management Platform  
+**Status**: Fully Local, Offline LAN Architecture (Zero Cloud, Zero Docker)  
 
 ---
 
 ## 1. System Philosophy & Ethical Foundation
 
-The Smart Classroom platform delivers a balanced environment for academic rigor and focused productivity through two distinct, policy-driven modes:
-1. **Exam Mode**: Guarantees proctoring integrity, device attestation, and verifiable event streams during high-stakes assessments.
-2. **Focus Mode**: Provides students with structured, distraction-free study blocks using Pomodoro rhythms, local attention nudges, and wellness analytics.
+SATARK delivers a balanced environment for academic assessment integrity and focused productivity through two distinct, policy-driven operational modes:
+1. **Exam Mode**: Guarantees proctoring integrity, candidate device attestation, verifiable window/process activity timelines, and live peer-to-peer screen monitoring during examinations.
+2. **Focus Mode**: Provides students with distraction-free study blocks using Pomodoro rhythms, edge vision nudges (OpenCV Haar cascades and Teachable Machine models), and 7-day persisted productivity analytics.
 
-### Exactly Two Application Roles
+### Strictly Two Application Roles
 The system supports **strictly two roles**:
-- **`teacher`**: The primary administrative authority. Endowed with administrative privileges for classroom management, examination orchestration, candidate device supervision, Focus Mode oversight, report analysis, and alert adjudication.
-- **`student`**: Enrolled candidate and self-directed learner. Capable of joining classrooms via enrollment codes, sitting for authorized exams, and managing personal Focus sessions.
+- **`teacher`**: The primary administrative authority. Endowed with privileges for classroom management, examination creation, candidate workstation attestation, live screen monitoring (up to 5 concurrent streams), report analysis, and alert adjudication.
+- **`student`**: Enrolled candidate and self-directed learner. Capable of joining classrooms via enrollment codes, taking authorized exams, approving screen sharing with explicit controls, and running private Focus sessions.
 
-There is **no separate `admin` role**; teacher accounts serve as the designated administrators of their academic environments.
+There is **no separate `admin` role**; teacher accounts serve as administrators of their academic environments.
 
 ### Ethical & Privacy Manifesto
 The system strictly adheres to **visible, authorized, and transparent monitoring**:
 - **Prohibited Capabilities**: The platform **NEVER** implements keystroke logging, background password harvesting, secret webcam or microphone access, unauthorized clipboard scraping, remote shell execution, or hidden surveillance.
 - **Explicit Attestation**: In Exam Mode, desktop agents register with an explicit student consent handshake. Active monitoring is indicated by persistent visual status indicators.
 - **Explainable Alerts**: No student is penalized by an opaque automated score. All alerts are accompanied by structured, verifiable evidence (timestamp, window title change, process start, or multi-display connection) for teacher review and human adjudication.
+- **Consent-Driven Screen Sharing**: Students must explicitly approve screen sharing via browser prompt, a prominent red status banner confirms live sharing, and the student retains a one-click "Stop Sharing" button at all times.
 
 ---
 
-## 2. Separate Frontends & Monorepo Architecture (Shared Infrastructure)
+## 2. Local LAN Topology & Monorepo Architecture
 
-The platform is structured as an npm monorepo with two independent frontend applications backed by **one authoritative FastAPI service** and **one Supabase PostgreSQL project**:
+The entire SATARK suite runs completely offline on a single Windows host computer, allowing multiple student workstations, teacher laptops, and Android mobile devices to connect over the same Wi-Fi network or mobile hotspot without Docker or cloud servers.
 
 ```mermaid
 flowchart TD
-    subgraph Monorepo ["SATARK Monorepo (apps/ & packages/)"]
-        subgraph Apps ["Independent Applications"]
-            T_APP["apps/teacher-portal (Vercel Project 1: Port 5174)"]
-            S_APP["apps/student-portal (Vercel Project 2: Port 5173)"]
+    subgraph Host_Machine ["Windows Host Computer (e.g. 10.106.76.105)"]
+        subgraph Portals ["Independent Frontends (Vite)"]
+            T_APP["apps/teacher-portal (Port 5174)"]
+            S_APP["apps/student-portal (Port 5173)"]
         end
 
-        subgraph Packages ["Shared Monorepo Packages"]
+        subgraph Monorepo_Packages ["Shared Packages"]
             PKG_TYPES["@satark/shared-types"]
             PKG_API["@satark/shared-api"]
-            PKG_AUTH["@satark/shared-auth (Supabase Auth & Roles)"]
-            PKG_UI["@satark/shared-ui (Radix Components & Theme)"]
+            PKG_AUTH["@satark/shared-auth (Local JWT)"]
+            PKG_UI["@satark/shared-ui (Radix + Tailwind)"]
             PKG_CFG["@satark/shared-config"]
         end
 
-        T_APP --> Packages
-        S_APP --> Packages
-    end
-
-    subgraph Backend_Cloud ["Shared Backend Infrastructure"]
-        FASTAPI["FastAPI Backend Service (Port 8000 / Render)"]
-        SUPABASE["Supabase PostgreSQL + JWKS Auth (ugsizlimcnxtbzkwficf)"]
-        WS_HUB["WebSocket & WebRTC Signaling Hub"]
-    end
-
-    T_APP -->|REST & WSS| FASTAPI
-    S_APP -->|REST & WSS| FASTAPI
-    FASTAPI --> SUPABASE
-    FASTAPI --> WS_HUB
-```
-            S_LOGIN["/student/login"]
-            S_DASH["/student/dashboard"]
-            S_CLS["/student/classrooms"]
-            S_EXM["/student/exams"]
-            S_FOC["/student/focus"]
-            S_HIS["/student/history"]
-            S_NOT["/student/notifications"]
+        subgraph Backend ["FastAPI Unified Application Server (Port 8000)"]
+            API["FastAPI REST Endpoints (/api/v1/*)"]
+            WS_SIG["WebSocket Hub (/ws/events, /ws/agent, /ws/webrtc)"]
+            WEBRTC["Native WebRTC Signaling & Session Manager"]
+            STORAGE["Local Media Storage (/storage/evidence, /uploads)"]
         end
+
+        subgraph Central_DB ["Central SQLite Database"]
+            SQLITE[("data/satark.db (WAL Mode, FK=ON)")]
+        end
+
+        T_APP --> Monorepo_Packages
+        S_APP --> Monorepo_Packages
+        T_APP -->|HTTP & WS| Backend
+        S_APP -->|HTTP & WS| Backend
+        API --> SQLITE
+        WS_SIG --> SQLITE
+        STORAGE --> Host_Machine
     end
 
-    ROUTER --> Teacher Portal Group
-    ROUTER --> Student Portal Group
+    subgraph LAN_Clients ["LAN Client Devices (Same Wi-Fi / Mobile Hotspot)"]
+        STUDENT_PC_1["Student Laptop 1 (Browser: Port 5173 + Desktop Agent)"]
+        STUDENT_PC_2["Student Laptop 2 (Browser: Port 5173 + Desktop Agent)"]
+        STUDENT_PC_N["Student Laptops 3..5 (Browser + Agent)"]
+        ANDROID_DEV["Android Mobile Devices (Capacitor APK)"]
+    end
 
-    Teacher Portal Group -->|JWT Role: teacher| API_GATEWAY["Unified FastAPI Backend (/api/v1/*)"]
-    Student Portal Group -->|JWT Role: student| API_GATEWAY
+    STUDENT_PC_1 <-->|HTTP / WS: 8000| Backend
+    STUDENT_PC_2 <-->|HTTP / WS: 8000| Backend
+    STUDENT_PC_N <-->|HTTP / WS: 8000| Backend
+    ANDROID_DEV <-->|HTTP / WS: 8000| Backend
+
+    STUDENT_PC_1 <===>|Native WebRTC P2P Video Stream| T_APP
+    STUDENT_PC_2 <===>|Native WebRTC P2P Video Stream| T_APP
+    STUDENT_PC_N <===>|Native WebRTC P2P Video Stream| T_APP
 ```
-
-### 2.1 Teacher Portal (`/teacher/*`)
-Dedicated layout with administrative sidebar, proctoring metrics, and classroom tools:
-- `/teacher/login`: Dedicated instructor entry point.
-- `/teacher/dashboard`: Live overview of active cohorts, connected lab devices, and critical alert queue.
-- `/teacher/classrooms`: Cohort creation, join-code rotation, and student roster auditing.
-- `/teacher/exams`: Examination designer, policy rule configuration, and real-time proctoring console.
-- `/teacher/focus`: Cross-classroom study session overview and aggregate focus trends.
-- `/teacher/devices`: Registered workstation registry, heartbeat health grid, and hardware status.
-- `/teacher/notifications`: Administrative dispatches and operational reminders.
-- `/teacher/reports`: Academic integrity incident dossiers and audit exports.
-
-### 2.2 Student Portal (`/student/*`)
-Distraction-free, modern interface focused on personal achievement and clear exam instructions:
-- `/student/login`: Student credential entry and device binding status.
-- `/student/dashboard`: Daily schedule, active classroom feeds, and quick-launch for exams and focus.
-- `/student/classrooms`: Enrolled courses, teacher contacts, and enrollment code entry dialog.
-- `/student/exams`: Examination portal with hardware pre-check, join PIN, and live timer.
-- `/student/focus`: Pomodoro workstation with customizable timer, study goals, and gentle nudges.
-- `/student/history`: Personal focus logs, study duration streaks, and self-improvement metrics.
-- `/student/notifications`: Teacher announcements, schedule changes, and gentle nudges.
 
 ---
 
-## 3. 4-Tier System Topology
+## 3. Teacher-Centred Native WebRTC Star Topology (No SFU, No Docker)
+
+Rather than running a heavy Selective Forwarding Unit (SFU) like LiveKit inside Docker, SATARK implements a lightweight **Teacher-Centred WebRTC Star Topology**:
+- **Signaling Broker**: FastAPI WebSockets (`/ws/webrtc`) acts as the SDP offer/answer and ICE candidate broker.
+- **Direct P2P Media Streams**: Up to 5 student workstations create direct `RTCPeerConnection` video tracks directly to the teacher portal's browser.
+- **Bandwidth Optimization**: Screen sharing streams are constrained to 720p @ 15fps with a maximum bitrate of 800 kbps, ensuring smooth playback on standard 2.4 GHz / 5 GHz Wi-Fi routers without packet congestion.
+- **ICE Configuration**: Local LAN ICE candidate exchange (`typ host`) enables direct peer connections between client machines on the subnet without needing external STUN/TURN servers.
+- **Zero Docker Footprint**: The entire system runs natively in Python and Node.js on the host Windows machine.
 
 ```mermaid
-flowchart TB
-    subgraph Client Tier
-        FE_T["Teacher Web App<br/>(/teacher/*)"]
-        FE_S["Student Web App<br/>(/student/*)"]
-        MOB["Single Android Mobile App<br/>(Capacitor Container)"]
-    end
+sequenceDiagram
+    participant T as Teacher Portal (Browser)
+    participant WS as FastAPI WebSocket Signaling
+    participant S as Student Portal (Browser)
 
-    subgraph Desktop Agent Tier
-        AGT_W["Windows Agent<br/>(Python pywin32 / psutil)"]
-        AGT_L["Linux Agent<br/>(Python X11 / procfs)"]
-    end
-
-    subgraph Backend Core Tier
-        API["FastAPI REST Gateway<br/>(/api/v1/*)"]
-        WS_HUB["WebSocket Real-Time Hub<br/>(/ws/teacher, /ws/student, /ws/agent)"]
-        AUTH["Auth & Role Engine<br/>(Server-Verified: teacher, student)"]
-        POLICY["Policy Engine<br/>(Exam Integrity & Focus Rules)"]
-    end
-
-    subgraph Data & Persistence Tier
-        DB[("SQLite Database<br/>(SQLAlchemy 2.x ORM)")]
-        AUDIT[("Immutable Audit Log<br/>(Operational & Integrity History)")]
-    end
-
-    FE_T -->|REST + WS /ws/teacher| API
-    FE_T -->|Realtime Alerts| WS_HUB
-    FE_S -->|REST + WS /ws/student| API
-    FE_S -->|Session Nudges| WS_HUB
-    MOB -->|Webview Bridge| API
-
-    AGT_W -->|WS /ws/agent + REST Heartbeat| WS_HUB
-    AGT_L -->|WS /ws/agent + REST Heartbeat| WS_HUB
-
-    API --> AUTH
-    API --> POLICY
-    WS_HUB --> POLICY
-    POLICY --> DB
-    POLICY --> AUDIT
-```
-
----
-
-## 4. Role Enforcement & Provisioning Architecture
-
-1. **Server-Verified Roles**:
-   - The frontend is **never trusted** to assign roles directly.
-   - Public self-registration defaults to role `student`.
-   - Teacher accounts require controlled provisioning (e.g., a secured instructor provisioning code or pre-approved institutional invite key verified exclusively on the server).
-2. **Endpoint-Level Authorization**:
-   - Every protected REST route checks the authenticated user's server-signed JWT role.
-   - Any attempt by a `student` token to invoke `/api/v1/classrooms` creation or `/api/v1/exams` management is rejected with HTTP `403 Forbidden`.
-3. **Classroom Enrollment Boundary**:
-   - Students cannot self-insert into arbitrary classes. Enrollment is gated strictly by valid 6-8 character classroom join codes generated and owned by teachers.
-
-4. **Desktop Agent Device-Scoped Security**:
-   - Background agents never store student passwords, teacher tokens, or session cookies.
-   - Pairing is initiated from the Student Portal via short-lived (10-minute) single-use pairing codes.
-   - The agent receives a scoped device JWT (`role: agent`) tied strictly to the student's hardware UUID.
-   - Single-active-device policy: registering a new device marks older devices inactive to prevent unauthorized proxy computing.
-   - Devices can be instantly revoked from the Student or Teacher portals.
-
----
-
-## 5. Mobile Architecture
-
-- **Single Android Application**: Powered by Capacitor.
-- Reuses the unified React codebase without duplicating views or maintaining two independent APKs.
-- Inspects the authenticated user's server-verified role upon login and routes automatically to either the Teacher or Student mobile experience.
-
----
-
-## 6. Phase Evolution Roadmap
-
-```mermaid
-flowchart LR
-    subgraph Phase 1: 3-Hour Foundation
-        P1_1["1.1 Audit & Foundation (Done)"] --> P1_2["1.2 FastAPI Backend Core (Active)"]
-        P1_2 --> P1_3["1.3 Frontend Unification (Dual Portals)"]
-        P1_3 --> P1_4["1.4 Python Desktop Agent"]
-        P1_4 --> P1_5["1.5 Core Integration"]
-        P1_5 --> P1_6["1.6 Mobile & Demo Verification"]
-    end
-
-    subgraph Phase 2: 24-Hour Advanced Expansion
-        P1_6 --> P2_1["2.1 Stabilization & Audit"]
-        P2_1 --> P2_2["2.2 Advanced Classroom Mgmt"]
-        P2_2 --> P2_3["2.3 Advanced OS Monitoring"]
-        P2_3 --> P2_4["2.4 Advanced Exam Integrity"]
-        P2_4 --> P2_5["2.5 Advanced Focus Analytics"]
-        P2_5 --> P2_6["2.6 Android & Push Notifications"]
-        P2_6 --> P2_7["2.7 Evidence, Reports & Exports"]
-        P2_7 --> P2_8["2.8 Hardening & Final Demo"]
+    T->>WS: Request Screen Share (studentId)
+    WS->>S: screen_share_request
+    S->>S: Prompt Student for Permission & Screen Select
+    alt Student Confirms
+        S->>S: Capture MediaStream (720p @ 15fps)
+        S->>WS: screen_share_accepted
+        T->>T: Create RTCPeerConnection & SDP Offer
+        T->>WS: webrtc_offer (SDP)
+        WS->>S: webrtc_offer (SDP)
+        S->>S: Set Remote Description & Create SDP Answer
+        S->>WS: webrtc_answer (SDP)
+        WS->>T: webrtc_answer (SDP)
+        Note over T,S: Exchange ICE Candidates via WebSocket
+        T-->>S: Direct P2P WebRTC Video Stream Established
+    else Student Declines / Cancels
+        S->>WS: screen_share_rejected
+        WS->>T: Notification: Student declined screen share
     end
 ```
+
+---
+
+## 4. Centralized SQLite Database Architecture
+
+- **Path**: `data/satark.db` (anchored dynamically to project root).
+- **Concurrency & Integrity**:
+  - `PRAGMA foreign_keys = ON;` enforces referential integrity.
+  - `PRAGMA journal_mode = WAL;` enables concurrent reads alongside active writes without database lock contention.
+  - `PRAGMA busy_timeout = 5000;` provides a 5-second lock queue before raising busy exceptions.
+- **Direct Access Prohibition**: Only the FastAPI application server interacts with `data/satark.db`. Client applications and student workstations never access SQLite files directly.
+- **Schema Compatibility View**: `CREATE VIEW IF NOT EXISTS profiles AS SELECT * FROM users;` bridges legacy profile references with zero disruption.
+- **Automated Backup Support**: Timestamped copies saved via `python -m backend.app.cli backup-db` into `data/backups/`.
+
+---
+
+## 5. Security & Authentication Model
+
+1. **Local Password Hashing**: Passwords stored using `passlib[bcrypt]` with unique salts.
+2. **Local JWT Tokens**: Generated using local signing secret (`SATARK_SECRET_KEY`) stored strictly on the backend (`backend/.env`). Never leaked to frontend portals.
+3. **Token Revocation**: Immediate in-memory blacklist invalidates tokens on user logout.
+4. **Desktop Agent Attestation**: Uses single-use 6-character alphanumeric pairing codes (e.g. `8K2NP4`) with 10-minute validity. Once redeemed, the agent receives an ephemeral device token linked strictly to that candidate workstation.
+5. **Path Traversal Protection**: Evidence uploads verify file size, validate MIME types (JPEG, PNG, WebP), and sanitize file names using UUIDs (`storage/evidence/<uuid>.jpg`).
