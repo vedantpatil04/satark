@@ -483,7 +483,7 @@ export const StudentFocus: React.FC = () => {
                   <SelectItem value="none">Independent Study (No Course)</SelectItem>
                   {classrooms.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.name} ({c.code})
+                      {c.title} ({c.subject_code || c.join_code})
                     </SelectItem>
                   ))}
                 </SelectContent>

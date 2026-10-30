@@ -30,12 +30,11 @@ import {
   Volume2
 } from "lucide-react";
 import { toast } from "sonner";
-import { examsApi, mediaApi, alertsApi } from "@satark/shared-api";
+import { examsApi, mediaApi, alertsApi, type ExamSession } from "@satark/shared-api";
 import { useRealtimeSocket } from "@/hooks/useRealtimeSocket";
 import type {
   MonitoringOverview,
-  StudentMonitoringCard,
-  ExamSession
+  StudentMonitoringCard
 } from "@satark/shared-types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -238,7 +237,7 @@ export const LiveMonitoring: React.FC = () => {
               return {
                 ...st,
                 is_sharing_screen: msg.is_sharing_screen,
-                share_status: msg.is_sharing_screen ? "sharing" : "stopped",
+                share_status: (msg.is_sharing_screen ? "sharing" : "stopped") as "sharing" | "stopped",
               };
             }
             return st;

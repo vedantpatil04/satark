@@ -6,7 +6,7 @@ import FocusTimer from "./FocusTimer";
 import CameraFeed from "./CameraFeed";
 import Chatbot from "./Chatbot";
 
-const ScreenShare = ({ onDistraction }: { onDistraction?: (msg: string) => void }) => (
+const ScreenShare = ({ onDistraction, isActive }: { onDistraction?: (msg: string) => void; isActive?: boolean }) => (
   <div className="p-4 text-center text-sm text-muted-foreground border rounded">Screen Share Monitor</div>
 );
 
@@ -17,9 +17,10 @@ const DistractionAlert = ({ message, onDismiss }: { message: string; onDismiss: 
   </div>
 );
 
-const FocusSessionSummary = ({ stats, onClose }: { stats: any; onClose: () => void }) => (
+const FocusSessionSummary = ({ stats, goal, onClose }: { stats: any; goal?: string; onClose: () => void }) => (
   <div className="p-4 bg-background border rounded text-center space-y-2">
     <h3 className="font-bold">Session Summary</h3>
+    {goal && <p className="text-sm text-muted-foreground">Goal: {goal}</p>}
     <p className="text-sm">Score: {stats.focusScore}%</p>
     <Button size="sm" onClick={onClose}>Close</Button>
   </div>
