@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { authApi } from "@/api/auth";
-import { GraduationCap, KeyRound, Loader2, Lock, Mail, User, ShieldCheck, Server } from "lucide-react";
+import { Shield, KeyRound, Loader2, Lock, Mail, User, ShieldCheck, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,7 +29,6 @@ export const TeacherLogin: React.FC = () => {
 
     try {
       if (isRegister) {
-        // Teacher registration requires the server-side provisioning key
         if (!provisioningKey.trim()) {
           toast.error("Teacher provisioning key is required");
           setLoading(false);
@@ -47,7 +46,6 @@ export const TeacherLogin: React.FC = () => {
         toast.success("Teacher account created! Logging in...");
       }
 
-      // Perform login
       const tokenRes = await authApi.login({ email, password });
       if (tokenRes.user.role !== "teacher") {
         toast.error("Unauthorized: This credential belongs to a Student account. Please log in through the Student Portal.");
@@ -57,7 +55,7 @@ export const TeacherLogin: React.FC = () => {
 
       login(tokenRes.access_token, tokenRes.user);
       toast.success(`Welcome back, ${tokenRes.user.full_name}`);
-      navigate("/teacher/dashboard", { replace: true });
+      navigate("/dashboard", { replace: true });
     } catch (err: any) {
       toast.error(err.message || "Authentication failed. Check your credentials.");
     } finally {
@@ -66,29 +64,29 @@ export const TeacherLogin: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-6 relative">
-      <div className="max-w-md w-full glass-card p-8 border border-border/50 shadow-2xl relative z-10">
+    <div className="min-h-screen bg-[#F6F5F2] flex items-center justify-center p-4 antialiased font-sans">
+      <div className="max-w-md w-full bg-white rounded-3xl border border-stone-200/80 p-8 sm:p-10 shadow-[0_8px_30px_rgba(0,0,0,0.04)] relative z-10">
         <div className="flex flex-col items-center text-center mb-6">
-          <div className="p-3 rounded-2xl bg-primary/10 text-primary mb-3">
-            <GraduationCap className="w-8 h-8" />
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-white flex items-center justify-center shadow-md shadow-amber-500/20 mb-3.5">
+            <Shield className="w-6 h-6" />
           </div>
-          <h1 className="text-2xl font-bold text-foreground">Teacher & Proctor Portal</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {isRegister ? "Register an instructor administrative profile" : "Authenticate to access classroom proctoring"}
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">SATARK Faculty Portal</h1>
+          <p className="text-xs text-stone-500 mt-1 max-w-xs">
+            {isRegister ? "Register an instructor administrative profile" : "Sign in to access classroom proctoring & examination controls"}
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {isRegister && (
             <div>
-              <Label htmlFor="fullName">Full Name</Label>
+              <Label htmlFor="fullName" className="text-xs font-semibold text-slate-700">Full Name</Label>
               <div className="relative mt-1">
-                <User className="w-4 h-4 text-muted-foreground absolute left-3 top-3" />
+                <User className="w-4 h-4 text-stone-400 absolute left-3 top-3" />
                 <Input
                   id="fullName"
                   type="text"
                   placeholder="Prof. Alan Turing"
-                  className="pl-9"
+                  className="pl-9 rounded-xl h-10 text-xs"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   required
@@ -98,14 +96,14 @@ export const TeacherLogin: React.FC = () => {
           )}
 
           <div>
-            <Label htmlFor="email">Institutional Email</Label>
+            <Label htmlFor="email" className="text-xs font-semibold text-slate-700">Institutional Email</Label>
             <div className="relative mt-1">
-              <Mail className="w-4 h-4 text-muted-foreground absolute left-3 top-3" />
+              <Mail className="w-4 h-4 text-stone-400 absolute left-3 top-3" />
               <Input
                 id="email"
                 type="email"
                 placeholder="teacher@classroom.edu"
-                className="pl-9"
+                className="pl-9 rounded-xl h-10 text-xs"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -114,14 +112,14 @@ export const TeacherLogin: React.FC = () => {
           </div>
 
           <div>
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password" className="text-xs font-semibold text-slate-700">Password</Label>
             <div className="relative mt-1">
-              <Lock className="w-4 h-4 text-muted-foreground absolute left-3 top-3" />
+              <Lock className="w-4 h-4 text-stone-400 absolute left-3 top-3" />
               <Input
                 id="password"
                 type="password"
                 placeholder="••••••••"
-                className="pl-9"
+                className="pl-9 rounded-xl h-10 text-xs"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -132,30 +130,34 @@ export const TeacherLogin: React.FC = () => {
           {isRegister && (
             <div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="key">Teacher Provisioning Key</Label>
-                <span className="text-[10px] text-primary flex items-center gap-1 font-semibold">
+                <Label htmlFor="key" className="text-xs font-semibold text-slate-700">Teacher Provisioning Key</Label>
+                <span className="text-[10px] text-[#D97706] flex items-center gap-1 font-semibold">
                   <ShieldCheck className="w-3 h-3" /> Server-Verified
                 </span>
               </div>
               <div className="relative mt-1">
-                <KeyRound className="w-4 h-4 text-muted-foreground absolute left-3 top-3" />
+                <KeyRound className="w-4 h-4 text-stone-400 absolute left-3 top-3" />
                 <Input
                   id="key"
                   type="password"
                   placeholder="Enter instructor security key"
-                  className="pl-9"
+                  className="pl-9 rounded-xl h-10 text-xs font-mono"
                   value={provisioningKey}
                   onChange={(e) => setProvisioningKey(e.target.value)}
                   required
                 />
               </div>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                Default key for test environment: <code className="text-primary font-mono">TEACHER-SECURE-KEY-2026</code>
+              <p className="text-[11px] text-stone-400 mt-1">
+                Default test key: <code className="text-[#D97706] font-mono">TEACHER-SECURE-KEY-2026</code>
               </p>
             </div>
           )}
 
-          <Button type="submit" disabled={loading} className="w-full mt-2 font-bold py-5">
+          <Button
+            type="submit"
+            disabled={loading}
+            className="w-full mt-2 font-bold text-xs bg-[#D97706] hover:bg-[#B45309] text-white rounded-xl h-10 shadow-xs"
+          >
             {loading ? (
               <span className="flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" /> Verifying...
@@ -163,26 +165,23 @@ export const TeacherLogin: React.FC = () => {
             ) : isRegister ? (
               "Provision Teacher Account"
             ) : (
-              "Access Teacher Dashboard"
+              "Sign In to Console"
             )}
           </Button>
         </form>
 
-        <div className="mt-6 pt-4 border-t border-border/40 text-center flex flex-col gap-2">
+        <div className="mt-6 pt-4 border-t border-stone-100 text-center flex flex-col gap-2">
           <button
             type="button"
             onClick={() => setIsRegister(!isRegister)}
-            className="text-xs text-primary hover:underline font-semibold"
+            className="text-xs text-[#D97706] hover:underline font-semibold"
           >
-            {isRegister ? "Already registered? Sign In" : "Need to provision a Teacher account?"}
+            {isRegister ? "Already registered? Sign In" : "Need to provision an Instructor account?"}
           </button>
-          <Link to="/student/login" className="text-xs text-muted-foreground hover:text-foreground">
-            Are you a student? Switch to <span className="underline">Student Portal</span>
-          </Link>
           <button
             type="button"
             onClick={() => setShowServerConfig(true)}
-            className="text-xs text-muted-foreground hover:text-primary mt-1 inline-flex items-center justify-center gap-1.5"
+            className="text-xs text-stone-400 hover:text-stone-700 mt-1 inline-flex items-center justify-center gap-1.5"
           >
             <Server className="w-3.5 h-3.5" /> Configure LAN Server Connection
           </button>
@@ -196,3 +195,4 @@ export const TeacherLogin: React.FC = () => {
     </div>
   );
 };
+export default TeacherLogin;

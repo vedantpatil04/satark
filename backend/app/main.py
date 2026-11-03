@@ -18,6 +18,8 @@ from backend.app.api.routes.reports import router as reports_router
 from backend.app.api.routes.evidence import router as evidence_router
 from backend.app.api.routes.question_banks import router as question_banks_router
 from backend.app.api.routes.media import router as media_router
+from backend.app.api.routes.compiler import router as compiler_router
+from backend.app.api.routes.notes import router as notes_router
 from backend.app.websocket.routes import router as ws_router
 
 
@@ -38,8 +40,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Development & LAN Origin Regex (supports mobile & workstation testing across private IP ranges)
-LAN_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$"
+# Development & LAN Origin Regex (supports satark.test, satark.local, mobile & workstation testing across private IP ranges)
+LAN_ORIGIN_REGEX = r"^https?://(([a-zA-Z0-9-]+\.)*(satark\.test|satark\.local)|localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$"
 
 # Standard CORS Middleware Configuration
 app.add_middleware(
@@ -102,6 +104,8 @@ app.include_router(reports_router, prefix=api_v1_prefix)
 app.include_router(evidence_router, prefix=api_v1_prefix)
 app.include_router(question_banks_router, prefix=api_v1_prefix)
 app.include_router(media_router, prefix=api_v1_prefix)
+app.include_router(compiler_router, prefix=api_v1_prefix)
+app.include_router(notes_router, prefix=api_v1_prefix)
 
 # Mount Real-Time WebSocket Routes
 app.include_router(ws_router)
@@ -125,10 +129,17 @@ def download_apk():
 
 if __name__ == "__main__":
     import uvicorn
+    ssl_key = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "certs", "key.pem"))
+    ssl_cert = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "certs", "cert.pem"))
+    ssl_kwargs = {}
+    if os.path.exists(ssl_key) and os.path.exists(ssl_cert):
+        ssl_kwargs["ssl_keyfile"] = ssl_key
+        ssl_kwargs["ssl_certfile"] = ssl_cert
     uvicorn.run(
         "backend.app.main:app",
         host=settings.BACKEND_HOST,
         port=settings.BACKEND_PORT,
-        reload=True
+        reload=True,
+        **ssl_kwargs
     )
 

@@ -77,17 +77,24 @@ export interface Exam {
   actual_end?: string;
   status: "draft" | "active" | "concluded" | "cancelled";
   policy_config: PolicyConfig;
+  is_results_published?: boolean;
+  passing_percentage?: number;
   created_at: string;
 }
+
+export type QuestionType = "mcq" | "multiple_select" | "true_false" | "short_answer";
 
 export interface ExamQuestion {
   id: string;
   exam_id: string;
   question_text: string;
+  question_type?: QuestionType;
   options: string[];
   marks: number;
   order_num: number;
-  correct_option_index?: number;
+  correct_option_index?: number | null;
+  correct_answers?: any[];
+  explanation?: string | null;
   created_at: string;
 }
 
@@ -96,10 +103,11 @@ export interface ExamSubmission {
   exam_id: string;
   student_id: string;
   student_name?: string;
-  score?: number;
-  total_marks?: number;
-  percentage?: number;
-  status: "in_progress" | "submitted" | "auto_graded" | "reviewed";
+  score?: number | null;
+  total_marks?: number | null;
+  percentage?: number | null;
+  status: string;
+  is_passed?: boolean | null;
   submitted_at: string;
 }
 
@@ -107,8 +115,49 @@ export interface StudentAnswer {
   id: string;
   exam_id: string;
   question_id: string;
-  selected_option_index?: number;
+  selected_option_index?: number | null;
+  selected_options?: number[];
+  text_answer?: string | null;
+  is_correct?: boolean | null;
+  marks_awarded?: number;
+  manual_score?: number | null;
+  feedback?: string | null;
   answered_at: string;
+}
+
+export interface SubmissionQuestionReview {
+  question_id: string;
+  question_text: string;
+  question_type: string;
+  options: string[];
+  marks: number;
+  order_num: number;
+  correct_option_index?: number | null;
+  correct_answers?: any[];
+  explanation?: string | null;
+  selected_option_index?: number | null;
+  selected_options?: number[];
+  text_answer?: string | null;
+  is_correct?: boolean | null;
+  marks_awarded: number;
+  manual_score?: number | null;
+  feedback?: string | null;
+}
+
+export interface SubmissionReviewResponse {
+  submission_id: string;
+  exam_id: string;
+  student_id: string;
+  student_name: string;
+  score: number;
+  total_marks: number;
+  percentage: number;
+  status: string;
+  is_passed?: boolean | null;
+  passing_percentage?: number;
+  is_results_published?: boolean;
+  submitted_at: string;
+  questions: SubmissionQuestionReview[];
 }
 
 // Device Types
@@ -299,7 +348,8 @@ export interface StudentMonitoringCard {
   os_version?: string | null;
   connection_status: "connected" | "offline";
   is_sharing_screen: boolean;
-  share_status: "not_started" | "pending" | "approved" | "sharing" | "stopped" | "rejected";
+  is_camera_on?: boolean;
+  share_status: "not_started" | "pending" | "approved" | "sharing" | "camera_active" | "stopped" | "rejected";
   alert_count: number;
   unacknowledged_alerts: number;
   last_activity_at?: string | null;
@@ -330,5 +380,38 @@ export interface MonitoringOverview {
   total_alerts: number;
   students: StudentMonitoringCard[];
 }
+
+// Class Notes & Study Materials Types
+export interface ClassNote {
+  id: string;
+  classroom_id: string;
+  classroom_title?: string;
+  classroom_subject_code?: string;
+  teacher_id: string;
+  teacher_name?: string;
+  title: string;
+  description?: string;
+  subject?: string;
+  category: string;
+  original_filename: string;
+  file_size_bytes: number;
+  mime_type: string;
+  file_extension: string;
+  is_published: boolean;
+  download_count: number;
+  created_at: string;
+  updated_at: string;
+  download_url?: string;
+  preview_url?: string;
+}
+
+export interface ClassNoteUpdatePayload {
+  title?: string;
+  description?: string;
+  subject?: string;
+  category?: string;
+  is_published?: boolean;
+}
+
 
 

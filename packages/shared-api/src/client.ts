@@ -7,22 +7,20 @@ export const getApiBaseUrl = (): string => {
     }
   }
 
-  // 2. Check build-time env variable
+  // 2. Check build-time env variable (only if explicitly pointing to a remote server)
   const envUrl = (import.meta as any).env?.VITE_API_BASE_URL;
-  if (envUrl && !envUrl.includes("localhost") && !envUrl.includes("127.0.0.1")) {
+  if (envUrl && !envUrl.includes("localhost") && !envUrl.includes("127.0.0.1") && !envUrl.includes("satark.test") && !envUrl.includes("satark.local")) {
     return envUrl;
   }
 
-  // 3. Fallback to current browser origin (if not mobile localhost)
+  // 3. Dynamic resolution from browser location (cross-PC LAN / HTTPS / satark.test)
   if (typeof window !== "undefined" && window.location) {
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1") {
-      return `${protocol}//${hostname}:8000/api/v1`;
-    }
+    const protocol = window.location.protocol === "https:" ? "https:" : "http:";
+    const hostname = window.location.hostname || "satark.test";
+    return `${protocol}//${hostname}:8000/api/v1`;
   }
 
-  return envUrl || "http://127.0.0.1:8000/api/v1";
+  return envUrl || "https://satark.test:8000/api/v1";
 };
 
 export interface RequestOptions extends RequestInit {
@@ -34,9 +32,12 @@ export async function apiClient<T>(endpoint: string, options: RequestOptions = {
 
   const storedToken = token !== undefined ? token : (typeof window !== "undefined" ? localStorage.getItem("auth_token") : null);
 
-  const defaultHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const defaultHeaders: Record<string, string> = {};
+  if (typeof FormData !== "undefined" && !(customConfig.body instanceof FormData)) {
+    defaultHeaders["Content-Type"] = "application/json";
+  } else if (typeof FormData === "undefined") {
+    defaultHeaders["Content-Type"] = "application/json";
+  }
 
   if (storedToken) {
     defaultHeaders["Authorization"] = `Bearer ${storedToken}`;

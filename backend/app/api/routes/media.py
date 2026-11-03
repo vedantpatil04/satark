@@ -174,7 +174,8 @@ def get_monitoring_overview(
         st_alerts = alerts_by_student.get(student_id_str, [])
 
         is_sharing = bool(part and part.is_sharing_screen)
-        if is_sharing:
+        is_camera = bool(part and (part.is_camera_on or getattr(part, 'is_camera_streaming', False)))
+        if is_sharing or is_camera:
             sharing_count += 1
 
         conn_status = "offline"
@@ -190,6 +191,8 @@ def get_monitoring_overview(
             share_status = req_obj.status
         if is_sharing:
             share_status = "sharing"
+        elif is_camera:
+            share_status = "camera_active"
 
         # Latest activity event
         last_event = db.query(ActivityEvent).filter(
@@ -210,6 +213,8 @@ def get_monitoring_overview(
             "os_version": dev.os_version if dev else None,
             "connection_status": conn_status,
             "is_sharing_screen": is_sharing,
+            "is_camera_on": is_camera,
+            "is_camera_streaming": is_camera,
             "share_status": share_status,
             "alert_count": len(st_alerts),
             "unacknowledged_alerts": sum(1 for a in st_alerts if not a.is_acknowledged),
@@ -397,6 +402,7 @@ async def update_stream_state(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exam not found")
 
     is_sharing = bool(payload.get("is_sharing"))
+    is_camera = bool(payload.get("is_camera"))
     now = datetime.now(timezone.utc)
 
     participant = db.query(MediaSessionParticipant).filter(
@@ -404,9 +410,26 @@ async def update_stream_state(
         MediaSessionParticipant.user_id == current_user.id
     ).first()
 
-    if participant:
-        participant.is_sharing_screen = is_sharing
-        if not is_sharing:
+    if not participant:
+        participant = MediaSessionParticipant(
+            exam_id=exam.id,
+            user_id=current_user.id,
+            role=current_user.role,
+            is_sharing_screen=is_sharing,
+            is_camera_on=is_camera,
+            connection_status="connected" if (is_sharing or is_camera) else "idle"
+        )
+        if hasattr(participant, "is_camera_streaming"):
+            participant.is_camera_streaming = is_camera
+        db.add(participant)
+    else:
+        if "is_sharing" in payload:
+            participant.is_sharing_screen = is_sharing
+        if "is_camera" in payload or "is_camera_streaming" in payload:
+            participant.is_camera_on = is_camera
+            if hasattr(participant, "is_camera_streaming"):
+                participant.is_camera_streaming = is_camera
+        if not is_sharing and not is_camera:
             participant.connection_status = "idle"
         else:
             participant.connection_status = "connected"
@@ -417,7 +440,7 @@ async def update_stream_state(
         MediaShareRequest.student_id == current_user.id
     ).first()
     if req_record:
-        req_record.status = "sharing" if is_sharing else "stopped"
+        req_record.status = "sharing" if (is_sharing or is_camera) else "stopped"
 
     db.commit()
 
@@ -428,10 +451,12 @@ async def update_stream_state(
         "student_id": current_user.id,
         "student_name": current_user.full_name,
         "is_sharing_screen": is_sharing,
+        "is_camera_on": is_camera,
+        "is_camera_streaming": is_camera,
         "timestamp": now.isoformat()
     })
 
-    return {"is_sharing": is_sharing, "student_id": current_user.id}
+    return {"is_sharing": is_sharing, "is_camera": is_camera, "student_id": current_user.id}
 
 
 @router.post("/{exam_id}/broadcast")

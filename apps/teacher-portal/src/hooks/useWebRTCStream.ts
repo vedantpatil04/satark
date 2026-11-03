@@ -8,8 +8,41 @@ interface UseWebRTCStreamOptions {
 }
 
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
-  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478"] },
 ];
+
+const isMacOS = (): boolean => {
+  if (typeof navigator === "undefined") return false;
+  return /Macintosh|Mac OS X|MacPPC|MacIntel/i.test(navigator.userAgent || navigator.platform);
+};
+
+const getMediaPermissionErrorMessage = (err: any, streamType: "camera" | "screen" | "both"): string => {
+  const isMac = isMacOS();
+  const errName = err?.name || "";
+  const errMsg = err?.message || "";
+
+  if (errName === "NotAllowedError" || errName === "PermissionDeniedError") {
+    if (isMac) {
+      if (streamType === "screen" || streamType === "both") {
+        return "macOS Screen Recording permission required: Open System Settings > Privacy & Security > Screen & System Audio Recording, enable your browser, and restart the browser.";
+      }
+      return "macOS Camera permission required: Open System Settings > Privacy & Security > Camera, enable your browser, and restart the browser.";
+    }
+    return `Permission denied. ${streamType === "both" ? "Both Webcam and Screen sharing" : streamType === "screen" ? "Screen sharing" : "Webcam"} are required for exam integrity.`;
+  }
+
+  if (errName === "NotFoundError" || errName === "DevicesNotFoundError") {
+    return "No compatible camera or display capture device detected.";
+  }
+
+  if (errName === "NotReadableError" || errName === "TrackStartError") {
+    return isMac
+      ? "Capture device is in use by another app or requires permission in System Settings > Privacy & Security."
+      : "Camera or Screen stream is currently in use by another application. Please close conflicting apps and retry.";
+  }
+
+  return `Media capture error: ${errMsg || "Failed to initialize stream."}`;
+};
 
 export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStreamOptions) {
   // State for student: pending share request from a teacher
@@ -26,9 +59,11 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
 
   // Clean up peer connection & media tracks
   const cleanup = useCallback(() => {
+    pendingCandidatesRef.current = [];
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
@@ -133,7 +168,7 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
       toast.success("Screen sharing active. Proctor is now viewing your display.");
     } catch (err: any) {
       console.error("Screen share start error:", err);
-      toast.error(err.name === "NotAllowedError" ? "Screen share permission was declined." : "Could not start screen sharing.");
+      toast.error(getMediaPermissionErrorMessage(err, "screen"));
       rejectScreenShare();
     }
   }, [incomingRequest, createPeerConnection, sendMessage]);
@@ -221,6 +256,17 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
             const pc = createPeerConnection(studentId, msg.exam_id);
             await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
 
+            // Drain any pending ICE candidates received before remote description was set
+            const queued = pendingCandidatesRef.current || [];
+            pendingCandidatesRef.current = [];
+            for (const cand of queued) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch (e) {
+                console.warn("Error draining ICE candidate:", e);
+              }
+            }
+
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
 
@@ -234,11 +280,15 @@ export function useWebRTCStream({ role, sendMessage, lastMessage }: UseWebRTCStr
             console.error("Error responding to offer:", e);
             toast.error("Failed to establish video connection with student.");
           }
-        } else if (msg.type === "ice_candidate" && pcRef.current && msg.candidate) {
-          try {
-            await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate));
-          } catch (e) {
-            console.error("Error adding ICE candidate:", e);
+        } else if (msg.type === "ice_candidate" && msg.candidate) {
+          if (pcRef.current && pcRef.current.remoteDescription && pcRef.current.remoteDescription.type) {
+            try {
+              await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            } catch (e) {
+              console.warn("Error adding ICE candidate:", e);
+            }
+          } else {
+            pendingCandidatesRef.current.push(msg.candidate);
           }
         } else if (msg.type === "screen_share_stopped") {
           cleanup();

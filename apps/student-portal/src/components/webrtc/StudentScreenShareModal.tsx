@@ -1,5 +1,5 @@
 import React from "react";
-import { Monitor, AlertCircle, ShieldAlert, Radio, UserCheck } from "lucide-react";
+import { Monitor, AlertCircle, ShieldAlert, Radio, Video, VideoOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,7 +9,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
 
 interface StudentScreenShareModalProps {
   incomingRequest: {
@@ -19,49 +18,58 @@ interface StudentScreenShareModalProps {
     exam_title?: string;
   } | null;
   isSharing: boolean;
+  isCameraActive?: boolean;
   onAccept: () => void;
   onReject: () => void;
   onStop: () => void;
+  onToggleCamera?: () => void;
+  isMobile?: boolean;
 }
 
 export const StudentScreenShareModal: React.FC<StudentScreenShareModalProps> = ({
   incomingRequest,
   isSharing,
+  isCameraActive = false,
   onAccept,
   onReject,
   onStop,
+  onToggleCamera,
+  isMobile = false,
 }) => {
   return (
     <>
-      {/* 1. Explicit Consent Request Dialog */}
+      {/* 1. Explicit Screen Sharing Consent Request Dialog */}
       <Dialog open={!!incomingRequest} onOpenChange={(open) => !open && onReject()}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <div className="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-2">
               <Monitor className="w-6 h-6 text-primary" />
             </div>
-            <DialogTitle className="text-lg font-bold">Proctor Screen Share Request</DialogTitle>
+            <DialogTitle className="text-lg font-bold">
+              Proctor Stream Request
+            </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground pt-1 leading-relaxed">
               Your instructor{" "}
               <strong className="text-foreground">
                 {incomingRequest?.teacher_name || "Exam Proctor"}
               </strong>{" "}
-              has requested to view your active desktop screen to verify assessment integrity
+              has requested to view your active screen and camera to verify examination integrity
               {incomingRequest?.exam_title ? ` for ${incomingRequest.exam_title}` : ""}.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-2.5 my-2">
-            <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-3.5 text-xs text-amber-600 dark:text-amber-400 flex items-start gap-2.5">
+            <div className="bg-primary/10 border border-primary/20 rounded-xl p-3.5 text-xs text-primary flex items-start gap-2.5">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
-                <strong>Browser Permission Required:</strong> You will be prompted by your browser to choose which screen, application window, or tab to share. Audio and camera are disabled by default.
+                <strong>Hardware Capture Consent:</strong> When you click accept, your browser will prompt you to allow webcam access and select your screen
+                {isMobile ? " (choose 'Entire screen')" : " (choose 'Entire screen' or window)"}.
               </span>
             </div>
 
             <div className="bg-muted/40 border border-border/50 rounded-xl p-3 text-[11px] text-muted-foreground flex items-center gap-2">
               <ShieldAlert className="w-4 h-4 shrink-0 text-primary" />
-              <span>You retain full control and can stop sharing at any moment during the exam.</span>
+              <span>You retain full consent control and can stop sharing at any time.</span>
             </div>
           </div>
 
@@ -69,17 +77,17 @@ export const StudentScreenShareModal: React.FC<StudentScreenShareModalProps> = (
             <Button variant="outline" size="sm" onClick={onReject} className="text-xs">
               Decline Request
             </Button>
-            <Button size="sm" onClick={onAccept} className="text-xs font-bold gap-1.5 bg-primary hover:bg-primary/90">
-              <Monitor className="w-3.5 h-3.5" /> Accept & Select Screen
+            <Button size="sm" onClick={onAccept} className="text-xs font-bold gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground">
+              <Video className="w-3.5 h-3.5" /> Accept & Authorize Streams
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* 2. Persistent Live Sharing Indicator Banner */}
-      {isSharing && (
+      {(isSharing || isCameraActive) && (
         <aside
-          aria-label="Active screen sharing notification"
+          aria-label="Active live streaming notification"
           className="fixed bottom-6 right-6 z-50 bg-rose-600 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-4 border border-rose-400/40 backdrop-blur-md animate-in slide-in-from-bottom-3 duration-300"
         >
           <div className="flex items-center gap-2.5">
@@ -89,22 +97,44 @@ export const StudentScreenShareModal: React.FC<StudentScreenShareModalProps> = (
             </span>
             <div>
               <div className="text-xs font-black tracking-wider uppercase flex items-center gap-1.5">
-                <Radio className="w-3.5 h-3.5 animate-pulse" /> Live Screen Sharing
+                <Radio className="w-3.5 h-3.5 animate-pulse" />
+                {isSharing && isCameraActive
+                  ? "Screen & Webcam Monitored"
+                  : isSharing
+                  ? "Screen Monitored"
+                  : "Webcam Monitored"}
               </div>
               <div className="text-[10px] text-white/80 font-medium">
-                Monitored by exam supervisor
+                {isSharing ? "Screen feed live to instructor" : "Optional webcam active"}
               </div>
             </div>
           </div>
 
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={onStop}
-            className="h-8 text-xs font-bold bg-white text-rose-600 hover:bg-white/90 shadow-sm ml-2"
-          >
-            Stop Sharing
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {onToggleCamera && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onToggleCamera}
+                className="text-xs font-bold bg-white/15 hover:bg-white/25 text-white h-7 px-2"
+                title={isCameraActive ? "Stop Optional Webcam" : "Start Optional Webcam"}
+              >
+                {isCameraActive ? <VideoOff className="w-3.5 h-3.5 mr-1" /> : <Video className="w-3.5 h-3.5 mr-1" />}
+                {isCameraActive ? "Cam Off" : "Cam On"}
+              </Button>
+            )}
+
+            {isSharing && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={onStop}
+                className="text-xs font-bold bg-white text-rose-600 hover:bg-white/90 h-7 px-2.5 shadow-sm"
+              >
+                Stop Sharing
+              </Button>
+            )}
+          </div>
         </aside>
       )}
     </>

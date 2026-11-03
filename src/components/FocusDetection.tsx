@@ -7,11 +7,14 @@ import {
   Loader2,
   Bell,
   Eye,
+  EyeOff,
   RefreshCw,
   UserCheck,
   UserX,
+  Users,
   Play,
   Activity,
+  ShieldAlert,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -48,7 +51,7 @@ const PROC_HEIGHT = 240;
 // Frame rate: 300ms delay between frames (~3.3 FPS)
 const FRAME_INTERVAL_MS = 300;
 
-// Structured Timestamped Logger
+// Structured Timestamped Logger with elapsed tracking
 const logStep = (step: string, details?: any) => {
   const ts = new Date().toISOString().split("T")[1].replace("Z", "");
   console.log(`[SATARK AI VISION | ${ts}] [${step}]`, details ?? "");
@@ -75,6 +78,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
   const isInitializedRef = useRef<boolean>(false);
   const isDetectingRef = useRef<boolean>(false);
   const isProcessingFrameRef = useRef<boolean>(false);
+  const initSessionIdRef = useRef<number>(0);
 
   // DOM & Media Refs
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -89,9 +93,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
   const faceCascadeRef = useRef<any>(null);
   const eyeCascadeRef = useRef<any>(null);
 
-  // Tracking Counters
-  const distractedTimeRef = useRef<number>(0);
-  const focusedTimeRef = useRef<number>(0);
+  // 5-Second Distraction Tracking Refs
+  const distractedStartTimeRef = useRef<number | null>(null);
+  const eyeHistoryRef = useRef<boolean[]>([]);
 
   // Performance Profiler Ref
   const profilerRef = useRef({
@@ -109,6 +113,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
   // Component UI State (Starts strictly as "idle" - NEVER auto-starts on mount)
   const [faceDetected, setFaceDetected] = useState<boolean>(false);
   const [eyesDetected, setEyesDetected] = useState<boolean>(false);
+  const [multipleFacesDetected, setMultipleFacesDetected] = useState<boolean>(false);
+  const [detectedFaceCount, setDetectedFaceCount] = useState<number>(0);
+  const [distractedSeconds, setDistractedSeconds] = useState<number>(0);
   const [alarmActive, setAlarmActive] = useState<boolean>(false);
   const [perfStats, setPerfStats] = useState<{ frameMs: number; fps: number }>({
     frameMs: 0,
@@ -133,64 +140,147 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
     onStatusChangeRef.current?.(status);
   }, []);
 
-  // 1. Load OpenCV.js with fast resolution & timeout protection
+  // 1. Load OpenCV.js with fast resolution, timeout protection, and thenable recursion fix
   const loadOpenCv = useCallback((): Promise<any> => {
     return new Promise((resolve, reject) => {
+      const cvStart = performance.now();
+      const timeoutMs = 15000;
+
+      // Helper to finalize and resolve OpenCV without thenable trap
+      const finalizeCv = () => {
+        const cv = window.cv;
+        if (!cv || !cv.Mat || !cv.CascadeClassifier) {
+          return false;
+        }
+
+        // CRITICAL ROOT-CAUSE FIX:
+        // In Emscripten OpenCV, Module['then'] exists which causes an infinite microtask
+        // recursion when resolved via Promise resolution procedure.
+        // We delete .then once OpenCV is ready so resolve(cv) treats it as a standard object.
+        try {
+          if (typeof cv.then === "function") {
+            delete cv.then;
+          }
+        } catch (e) {
+          console.warn("[FocusDetection] Notice: cv.then delete:", e);
+        }
+
+        logStep("OPENCV_INITIALIZATION_RESOLVED", {
+          durationMs: Math.round(performance.now() - cvStart),
+        });
+        resolve(cv);
+        return true;
+      };
+
       // If already initialized in window, resolve immediately
-      if (window.cv && window.cv.Mat && window.cv.CascadeClassifier) {
-        return resolve(window.cv);
+      if (finalizeCv()) {
+        return;
       }
 
       // Check if script tag exists
       let script = document.querySelector(`script[src*="opencv.js"]`) as HTMLScriptElement;
       if (!script) {
+        logStep("OPENCV_INJECTING_SCRIPT_TAG");
         script = document.createElement("script");
         script.src = "/opencv.js";
         script.async = true;
         script.type = "text/javascript";
+        script.onerror = () => {
+          clearInterval(interval);
+          clearTimeout(timeoutId);
+          reject(new Error("Failed to load /opencv.js from server (network error or file missing)."));
+        };
         document.body.appendChild(script);
       }
 
-      const startTime = Date.now();
-      const timeoutMs = 15000;
+      // Attach to onRuntimeInitialized if cv object exists
+      if (window.cv && typeof window.cv === "object") {
+        const prevInit = window.cv.onRuntimeInitialized;
+        window.cv.onRuntimeInitialized = () => {
+          if (typeof prevInit === "function") {
+            try {
+              prevInit();
+            } catch (e) {}
+          }
+          finalizeCv();
+        };
+      }
 
+      // Polling interval with 15-second individual timeout
       const interval = setInterval(() => {
         if (!isMountedRef.current) {
           clearInterval(interval);
+          clearTimeout(timeoutId);
           return;
         }
 
-        if (window.cv && window.cv.Mat && window.cv.CascadeClassifier) {
+        if (finalizeCv()) {
           clearInterval(interval);
-          resolve(window.cv);
-        } else if (Date.now() - startTime > timeoutMs) {
-          clearInterval(interval);
-          reject(new Error("OpenCV WebAssembly engine timed out during load."));
+          clearTimeout(timeoutId);
         }
       }, 100);
+
+      const timeoutId = setTimeout(() => {
+        clearInterval(interval);
+        reject(
+          new Error("OpenCV WebAssembly engine timed out during load (15s limit reached).")
+        );
+      }, timeoutMs);
     });
   }, []);
 
-  // 2. Load model XML into OpenCV virtual filesystem safely
-  const loadFileToOpenCV = async (url: string, path: string) => {
+  // 2. Load model XML into OpenCV virtual filesystem safely with fallback paths & 404 detection
+  const loadFileToOpenCV = async (primaryUrl: string, fallbackUrl: string, filename: string): Promise<void> => {
     const cv = window.cv;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to load ${path} (HTTP ${response.status})`);
+    if (!cv || !cv.FS_createDataFile) {
+      throw new Error("OpenCV virtual filesystem is not available in memory.");
     }
+
+    const fetchStart = performance.now();
+    let response: Response;
+    try {
+      response = await fetch(primaryUrl);
+      if (!response.ok && fallbackUrl) {
+        logStep("CASCADE_FALLBACK_ATTEMPT", { primaryUrl, fallbackUrl, status: response.status });
+        response = await fetch(fallbackUrl);
+      }
+    } catch (networkErr: any) {
+      if (fallbackUrl) {
+        response = await fetch(fallbackUrl);
+      } else {
+        throw new Error(`Network failure loading ${filename}: ${networkErr?.message || networkErr}`);
+      }
+    }
+
+    if (!response.ok) {
+      throw new Error(`Failed to load ${filename} (HTTP ${response.status}). Model file not found on server.`);
+    }
+
     const buffer = await response.arrayBuffer();
+    if (!buffer || buffer.byteLength === 0) {
+      throw new Error(`Downloaded model ${filename} was empty (0 bytes).`);
+    }
+
     const data = new Uint8Array(buffer);
 
     try {
-      cv.FS_unlink("/" + path);
+      cv.FS_unlink("/" + filename);
     } catch {
       // Ignored if file does not exist yet
     }
-    cv.FS_createDataFile("/", path, data, true, false, false);
+    cv.FS_createDataFile("/", filename, data, true, false, false);
+    logStep("CASCADE_VFS_FILE_CREATED", {
+      filename,
+      bytes: buffer.byteLength,
+      durationMs: Math.round(performance.now() - fetchStart),
+    });
   };
 
   // 3. Stop detection and cleanly release camera stream, timers, and OpenCV memory
   const stopVisionPipeline = useCallback((reason: string = "explicit") => {
+    // Invalidate any in-flight initialization sessions
+    initSessionIdRef.current += 1;
+
     const hadActiveResources =
       isDetectingRef.current || isInitializingRef.current || streamRef.current !== null;
 
@@ -256,6 +346,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
     if (isMountedRef.current) {
       setFaceDetected(false);
       setEyesDetected(false);
+      setMultipleFacesDetected(false);
+      setDetectedFaceCount(0);
+      setDistractedSeconds(0);
       setAlarmActive(false);
       setPerfStats({ frameMs: 0, fps: 0 });
       setFocusState({
@@ -264,6 +357,8 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         status: "idle",
       });
     }
+    distractedStartTimeRef.current = null;
+    eyeHistoryRef.current = [];
     onStatusChangeRef.current?.("idle");
   }, []);
 
@@ -309,6 +404,8 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
       let faces: any = null;
       let areFacesVisible = false;
       let areEyesVisible = false;
+      let faceCount = 0;
+      let areMultipleFaces = false;
       let isTmFocused = true;
       let postureConfidence = 0.9;
       let sortedPredictions: any[] = [];
@@ -343,13 +440,24 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
           gray = new cv.Mat();
           cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
+          // Histogram equalization normalizes lighting and shadows, drastically improving Haar detection
+          cv.equalizeHist(gray, gray);
+
           faces = new cv.RectVector();
           if (faceCascadeRef.current) {
             const faceStart = performance.now();
-            faceCascadeRef.current.detectMultiScale(gray, faces, 1.25, 4);
+            const minFaceSize = new cv.Size(40, 40);
+            faceCascadeRef.current.detectMultiScale(gray, faces, 1.2, 4, 0, minFaceSize);
             faceMs = performance.now() - faceStart;
 
-            if (faces.size() > 0) {
+            faceCount = faces.size();
+
+            if (faceCount >= 2) {
+              // REQUIREMENT 1: Multiple Person Detection (2 or more people in frame)
+              areMultipleFaces = true;
+              areFacesVisible = true;
+              areEyesVisible = false;
+            } else if (faceCount === 1) {
               areFacesVisible = true;
               const face = faces.get(0);
               const roiGray = gray.roi(face);
@@ -357,36 +465,103 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
 
               if (eyeCascadeRef.current) {
                 const eyeStart = performance.now();
-                eyeCascadeRef.current.detectMultiScale(roiGray, eyes, 1.15, 3);
+                // Narrow ROI to upper 16% to 56% of face where eyes naturally reside
+                const eyeRegionY = Math.round(face.height * 0.16);
+                const eyeRegionH = Math.round(face.height * 0.40);
+                const eyeRegion = new cv.Rect(0, eyeRegionY, face.width, eyeRegionH);
+                const eyeRoi = roiGray.roi(eyeRegion);
+
+                const minEye = new cv.Size(Math.round(face.width * 0.09), Math.round(face.height * 0.08));
+                const maxEye = new cv.Size(Math.round(face.width * 0.42), Math.round(face.height * 0.36));
+                eyeCascadeRef.current.detectMultiScale(eyeRoi, eyes, 1.12, 3, 0, minEye, maxEye);
                 eyeMs = performance.now() - eyeStart;
+
                 if (eyes.size() >= 1) {
                   areEyesVisible = true;
                 }
+
+                eyeRoi.delete();
+                eyes.delete();
               }
 
               roiGray.delete();
-              eyes.delete();
             }
           }
         }
 
-        // --- C. Hybrid Attention Decision ---
-        const isCurrentlyFocused = areFacesVisible && (areEyesVisible || isTmFocused);
+        // Eye tracking temporal smoothing to avoid false-positive distraction blips during natural 150ms blinks
+        const eyeHistory = eyeHistoryRef.current;
+        eyeHistory.push(areEyesVisible);
+        if (eyeHistory.length > 3) eyeHistory.shift();
+        const smoothedEyesVisible = eyeHistory.some(Boolean);
 
-        if (!isCurrentlyFocused) {
-          distractedTimeRef.current += 1;
-          focusedTimeRef.current = 0;
+        // REQUIREMENT 2: Improved Focus Accuracy
+        // Student is focused ONLY when:
+        // 1. Exactly 1 person is in front of the camera (not 0 and not >= 2)
+        // 2. Eyes are looking forward towards screen (verified by Haar eye cascade & temporal smoothing)
+        let isCurrentlyFocused = false;
 
-          if (distractedTimeRef.current >= 12 && !isAlarmPlaying()) {
+        if (areMultipleFaces) {
+          // Multiple people detected -> strictly Distracted
+          isCurrentlyFocused = false;
+        } else if (!areFacesVisible || faceCount === 0) {
+          // No face detected -> student left camera / desk -> Distracted
+          isCurrentlyFocused = false;
+        } else if (!smoothedEyesVisible && !areEyesVisible) {
+          // Face detected but eyes looking away / down for >1s -> Distracted
+          isCurrentlyFocused = false;
+        } else {
+          // Exactly 1 person present with eyes tracked looking at screen -> Focused
+          isCurrentlyFocused = true;
+        }
+
+        const now = performance.now();
+
+        // REQUIREMENT 1: Multiple Person Detection Alarm
+        // "If multiple people are detected, the system should immediately trigger a beep notification and mark the status as 'Distracted'."
+        if (areMultipleFaces) {
+          distractedStartTimeRef.current = now;
+          if (isMountedRef.current) {
+            setDistractedSeconds(0);
+          }
+
+          // Immediately trigger alarm beep notification without 5-second delay
+          if (!isAlarmPlaying()) {
+            startContinuousAlarm(1400, 300, 200);
+            if (isMountedRef.current) setAlarmActive(true);
+            onDistractedTooLongRef.current?.();
+          }
+        }
+        // REQUIREMENT 4: Five-Second Distraction Delay for looking away / missing face
+        // "The alarm should only start beeping when the student remains distracted for 5 continuous seconds. It should not trigger immediately when the student briefly looks away."
+        else if (!isCurrentlyFocused) {
+          if (distractedStartTimeRef.current === null) {
+            distractedStartTimeRef.current = now;
+          }
+
+          const elapsedDistractedMs = now - distractedStartTimeRef.current;
+          const elapsedSec = Math.floor(elapsedDistractedMs / 1000);
+          if (isMountedRef.current) {
+            setDistractedSeconds(elapsedSec);
+          }
+
+          // Trigger alarm ONLY after 5 continuous seconds
+          if (elapsedDistractedMs >= 5000 && !isAlarmPlaying()) {
             startContinuousAlarm(1200, 400, 300);
             if (isMountedRef.current) setAlarmActive(true);
             onDistractedTooLongRef.current?.();
           }
-        } else {
-          distractedTimeRef.current = 0;
-          focusedTimeRef.current += 1;
+        }
+        // REQUIREMENT 3: Automatic Alarm Stop
+        // "When the student comes back into the camera frame and is detected again, the alarm should automatically stop."
+        else {
+          distractedStartTimeRef.current = null;
+          if (isMountedRef.current) {
+            setDistractedSeconds(0);
+          }
 
-          if (focusedTimeRef.current >= 2 && isAlarmPlaying()) {
+          // When the student is detected back in frame, automatically stop the alarm immediately
+          if (isAlarmPlaying()) {
             stopContinuousAlarm();
             if (isMountedRef.current) setAlarmActive(false);
           }
@@ -396,6 +571,8 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         if (isMountedRef.current) {
           setFaceDetected((prev) => (prev !== areFacesVisible ? areFacesVisible : prev));
           setEyesDetected((prev) => (prev !== areEyesVisible ? areEyesVisible : prev));
+          setMultipleFacesDetected((prev) => (prev !== areMultipleFaces ? areMultipleFaces : prev));
+          setDetectedFaceCount((prev) => (prev !== faceCount ? faceCount : prev));
 
           setFocusState((prev) => {
             if (
@@ -424,11 +601,11 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         p.lastEyeMs = Math.round(eyeMs);
         p.lastTmMs = Math.round(tmMs);
 
-        const now = performance.now();
-        if (now - p.lastFpsTimestamp >= 1000) {
+        const nowProf = performance.now();
+        if (nowProf - p.lastFpsTimestamp >= 1000) {
           p.fps = p.framesThisSecond;
           p.framesThisSecond = 0;
-          p.lastFpsTimestamp = now;
+          p.lastFpsTimestamp = nowProf;
 
           if (isMountedRef.current) {
             setPerfStats({ frameMs: p.lastFrameMs, fps: p.fps });
@@ -460,31 +637,31 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
     detect();
   }, []);
 
-  // 5. Explicit "Start AI Vision" Pipeline with Immediate State Updates and Robust Video Binding
+  // 5. Explicit "Start AI Vision" Pipeline with Strict Concurrency & Microtask Loop Prevention
   const startVisionPipeline = useCallback(async () => {
     if (isInitializingRef.current || isDetectingRef.current) {
       logStep("CAMERA_REQUEST_IGNORED", "Already initializing or active");
       return;
     }
     isInitializingRef.current = true;
+    const currentSessionId = ++initSessionIdRef.current;
+    const initStart = performance.now();
 
-    logStep("CAMERA_REQUEST_STARTED", "Invoking navigator.mediaDevices.getUserMedia()");
+    logStep("CAMERA_REQUEST_STARTED", { sessionId: currentSessionId });
     updateStatus("loading", "Step 1/3: Requesting webcam access...");
 
-    // 15-Second Hard Timeout Guard
+    // Overall Safety Timeout Ceiling (45 seconds)
     initTimeoutRef.current = setTimeout(() => {
-      if (isInitializingRef.current) {
-        logStep("INITIALIZATION_TIMEOUT", "Camera or model initialization exceeded 15 seconds");
+      if (isInitializingRef.current && initSessionIdRef.current === currentSessionId) {
+        logStep("INITIALIZATION_TIMEOUT", "AI pipeline overall duration exceeded 45 seconds");
         stopVisionPipeline();
         updateStatus(
           "error",
           undefined,
-          "Camera or AI model initialization timed out (15s). Please ensure camera is connected and allowed, then click Retry."
+          "AI Vision Engine initialization timed out. Please verify your camera is connected and unblocked, then click Retry."
         );
       }
-    }, 15000);
-
-    const initStart = performance.now();
+    }, 45000);
 
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -493,13 +670,23 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         );
       }
 
-      // 1. Acquire MediaStream
+      // Step 1: Acquire MediaStream
+      const cameraStart = performance.now();
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
         audio: false,
       });
 
-      logStep("CAMERA_REQUEST_RESOLVED", { tracks: stream.getVideoTracks().length });
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      logStep("CAMERA_REQUEST_RESOLVED", {
+        tracks: stream.getVideoTracks().length,
+        durationMs: Math.round(performance.now() - cameraStart),
+      });
 
       const videoTrack = stream.getVideoTracks()[0];
       if (!videoTrack || videoTrack.readyState !== "live") {
@@ -511,18 +698,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         enabled: videoTrack.enabled,
       });
 
-      // 2. IMMEDIATELY advance UI stage so user is never stuck looking at Step 1/3
-      updateStatus("loading", "Step 2/3: Initializing AI Vision Engine...");
-
-      if (!isMountedRef.current) {
-        logStep("CAMERA_ABORT_UNMOUNTED", "Component was unmounted before binding");
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-
       streamRef.current = stream;
 
-      // 3. Bind stream to mounted video element
+      // Step 2: Bind stream to mounted video element
       const video = videoRef.current;
       if (!video) {
         throw new Error("Video element DOM reference was not found.");
@@ -531,120 +709,181 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
 
       video.srcObject = stream;
       video.muted = true;
+      video.playsInline = true;
+      video.setAttribute("playsinline", "true");
       logStep("VIDEO_SRC_OBJECT_ASSIGNED");
 
-      // 4. Ensure video is actively playing with safety fallback
-      await new Promise<void>((resolve) => {
+      // Step 3: Wait for video element readiness (HAVE_ENOUGH_DATA)
+      updateStatus("loading", "Step 2/3: Binding camera feed (HAVE_ENOUGH_DATA)...");
+      const videoWaitStart = performance.now();
+
+      await new Promise<void>((resolve, reject) => {
         let isDone = false;
-        const completeVideoPlay = (reason: string) => {
+        const videoTimeout = setTimeout(() => {
           if (!isDone) {
             isDone = true;
+            cleanup();
+            if (video.readyState >= 2 && video.videoWidth > 0) {
+              logStep("VIDEO_PLAY_TIMEOUT_PROCEED", {
+                readyState: video.readyState,
+                videoWidth: video.videoWidth,
+                videoHeight: video.videoHeight,
+              });
+              resolve();
+            } else {
+              reject(new Error("Webcam feed timed out waiting for active video data (HAVE_ENOUGH_DATA)."));
+            }
+          }
+        }, 8000);
+
+        const cleanup = () => {
+          clearTimeout(videoTimeout);
+          video.removeEventListener("loadeddata", onDataReady);
+          video.removeEventListener("canplay", onDataReady);
+          video.removeEventListener("playing", onDataReady);
+        };
+
+        const onDataReady = () => {
+          if (!isDone && video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+            isDone = true;
+            cleanup();
             logStep("VIDEO_PLAY_SUCCESS", {
-              reason,
               readyState: video.readyState,
               videoWidth: video.videoWidth,
               videoHeight: video.videoHeight,
+              durationMs: Math.round(performance.now() - videoWaitStart),
             });
             resolve();
           }
         };
 
-        const attemptPlay = () => {
-          video
-            .play()
-            .then(() => completeVideoPlay("play_promise_resolved"))
-            .catch((playErr) => {
-              console.warn("[FocusDetection] Play promise warning:", playErr);
-              completeVideoPlay("play_catch_fallback");
-            });
-        };
+        video.addEventListener("loadeddata", onDataReady);
+        video.addEventListener("canplay", onDataReady);
+        video.addEventListener("playing", onDataReady);
 
-        if (video.readyState >= 2 && video.videoWidth > 0) {
-          logStep("VIDEO_METADATA_READY", {
-            readyState: video.readyState,
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-          });
-          attemptPlay();
-        } else {
-          const onMetadata = () => {
-            logStep("VIDEO_METADATA_READY", {
-              readyState: video.readyState,
-              videoWidth: video.videoWidth,
-              videoHeight: video.videoHeight,
-            });
-            video.removeEventListener("loadedmetadata", onMetadata);
-            video.removeEventListener("canplay", onMetadata);
-            attemptPlay();
-          };
+        video.play().catch((playErr) => {
+          console.warn("[FocusDetection] video.play() warning:", playErr);
+        });
 
-          video.addEventListener("loadedmetadata", onMetadata, { once: true });
-          video.addEventListener("canplay", onMetadata, { once: true });
-
-          // Also trigger play right away
-          attemptPlay();
-
-          // Maximum 1.5s timeout: proceed regardless so we never stall
-          setTimeout(() => completeVideoPlay("timeout_fallback"), 1500);
+        if (video.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+          onDataReady();
         }
       });
 
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
+
       logStep("CAMERA_PREVIEW_READY");
 
-      // 5. Load OpenCV WebAssembly
+      // Step 4: Load OpenCV WebAssembly Runtime (with microtask recursion fix)
       logStep("OPENCV_INITIALIZATION_STARTED");
-      updateStatus("loading", "Step 2/3: Loading OpenCV WebAssembly...");
+      updateStatus("loading", "Step 2/3: Loading OpenCV WebAssembly runtime...");
       const cvStart = performance.now();
       const cv = await loadOpenCv();
+
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
       logStep("OPENCV_INITIALIZATION_RESOLVED", { durationMs: Math.round(performance.now() - cvStart) });
 
-      // 6. Load Haar Cascades
+      // Step 5: Load Haar Cascades into OpenCV Virtual Filesystem
       logStep("CASCADE_INITIALIZATION_STARTED");
-      updateStatus("loading", "Step 2/3: Loading Haar Cascades...");
+      updateStatus("loading", "Step 2/3: Loading Haar Cascade face & eye models...");
       const cascadeStart = performance.now();
-      await loadFileToOpenCV("/models/haarcascade_frontalface_default.xml", "haarcascade_frontalface_default.xml");
-      await loadFileToOpenCV("/models/haarcascade_eye.xml", "haarcascade_eye.xml");
 
-      if (!faceCascadeRef.current) faceCascadeRef.current = new cv.CascadeClassifier();
-      faceCascadeRef.current.load("haarcascade_frontalface_default.xml");
+      await loadFileToOpenCV(
+        "/models/haarcascade_frontalface_default.xml",
+        "/model/haarcascade_frontalface_default.xml",
+        "haarcascade_frontalface_default.xml"
+      );
+      await loadFileToOpenCV(
+        "/models/haarcascade_eye.xml",
+        "/model/haarcascade_eye.xml",
+        "haarcascade_eye.xml"
+      );
 
-      if (!eyeCascadeRef.current) eyeCascadeRef.current = new cv.CascadeClassifier();
-      eyeCascadeRef.current.load("haarcascade_eye.xml");
-      logStep("CASCADE_INITIALIZATION_RESOLVED", { durationMs: Math.round(performance.now() - cascadeStart) });
+      // StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
 
-      // 7. Load Teachable Machine Posture Model (Graceful fallback)
+      // Initialize Face Classifier
+      if (!faceCascadeRef.current) {
+        faceCascadeRef.current = new cv.CascadeClassifier();
+      }
+      const faceLoaded = faceCascadeRef.current.load("haarcascade_frontalface_default.xml");
+      if (!faceLoaded || faceCascadeRef.current.empty()) {
+        throw new Error("Face detection classifier failed to compile from XML into OpenCV memory.");
+      }
+
+      // Initialize Eye Classifier
+      if (!eyeCascadeRef.current) {
+        eyeCascadeRef.current = new cv.CascadeClassifier();
+      }
+      const eyeLoaded = eyeCascadeRef.current.load("haarcascade_eye.xml");
+      if (!eyeLoaded || eyeCascadeRef.current.empty()) {
+        throw new Error("Eye detection classifier failed to compile from XML into OpenCV memory.");
+      }
+
+      logStep("CASCADE_INITIALIZATION_RESOLVED", {
+        durationMs: Math.round(performance.now() - cascadeStart),
+      });
+
+      // Step 6: Load Teachable Machine Posture Model (Graceful fallback with 15s timeout)
       updateStatus("loading", "Step 3/3: Initializing Posture Model...");
       try {
         const tmStart = performance.now();
         const modelURL = window.location.origin + "/models/model.json";
         const metadataURL = window.location.origin + "/models/metadata.json";
-        const tmModel = await tmImage.load(modelURL, metadataURL);
-        tmModelRef.current = tmModel;
-        logStep("TM_MODEL_INITIALIZATION_RESOLVED", { durationMs: Math.round(performance.now() - tmStart) });
-      } catch (tmErr) {
-        console.warn("[FocusDetection] TM model load skipped, continuing with Haar Cascades:", tmErr);
+
+        const loadTmWithTimeout = Promise.race([
+          tmImage.load(modelURL, metadataURL),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Posture model loading exceeded 15s timeout")), 15000)
+          ),
+        ]);
+
+        const tmModel = await loadTmWithTimeout;
+        if (isMountedRef.current && initSessionIdRef.current === currentSessionId) {
+          tmModelRef.current = tmModel;
+          logStep("TM_MODEL_INITIALIZATION_RESOLVED", {
+            durationMs: Math.round(performance.now() - tmStart),
+          });
+        }
+      } catch (tmErr: any) {
+        logStep("TM_MODEL_LOAD_SKIPPED", { reason: tmErr?.message });
+        console.warn("[FocusDetection] Posture model load skipped, continuing with Haar Cascades:", tmErr);
+        tmModelRef.current = null;
       }
 
-      // Success: Clear 15-second timeout and start detection loop
+      // Final StrictMode / Cancellation check
+      if (!isMountedRef.current || initSessionIdRef.current !== currentSessionId) {
+        return;
+      }
+
+      // Success: Clear timeout ceiling and activate detection loop
       if (initTimeoutRef.current) {
         clearTimeout(initTimeoutRef.current);
         initTimeoutRef.current = null;
       }
 
-      if (isMountedRef.current) {
-        isInitializedRef.current = true;
-        isInitializingRef.current = false;
-        logStep("DETECTION_LOOP_STARTED", { totalInitDurationMs: Math.round(performance.now() - initStart) });
-        updateStatus("detecting");
-        startDetectionLoop();
-      }
+      isInitializedRef.current = true;
+      isInitializingRef.current = false;
+      logStep("DETECTION_LOOP_STARTED", {
+        totalInitDurationMs: Math.round(performance.now() - initStart),
+      });
+      updateStatus("detecting");
+      startDetectionLoop();
     } catch (err: any) {
       if (initTimeoutRef.current) {
         clearTimeout(initTimeoutRef.current);
         initTimeoutRef.current = null;
       }
       isInitializingRef.current = false;
-      stopVisionPipeline();
+      stopVisionPipeline("init_error");
 
       logStep("INITIALIZATION_FAILED", { message: err?.message, name: err?.name });
       console.error("[FocusDetection] Initialization error:", err);
@@ -713,7 +952,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
           </div>
         )}
 
-        {/* 2. LOADING STATE: Progressive Status Spinner with Cancel Button */}
+        {/* 2. LOADING STATE: Progressive Status Spinner with Sub-Stage Text & Cancel Button */}
         {focusState.status === "loading" && (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 backdrop-blur-sm p-6 text-center space-y-3 z-10">
             <Loader2 className="h-10 w-10 mx-auto text-primary animate-spin" />
@@ -726,7 +965,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={stopVisionPipeline}
+              onClick={() => stopVisionPipeline("user_cancel")}
               className="text-xs border-white/20 hover:bg-white/10 text-muted-foreground mt-1"
             >
               Cancel
@@ -739,20 +978,25 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
           <>
             {/* Live OpenCV Face & Eye Tracking Badge */}
             <div className="absolute top-3 left-3 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-2 text-xs border border-white/15 shadow-sm z-10">
-              {eyesDetected ? (
+              {multipleFacesDetected ? (
+                <>
+                  <Users className="h-3.5 w-3.5 text-rose-400 animate-pulse" />
+                  <span className="text-rose-300 font-bold">Multiple People Detected ({detectedFaceCount} in frame)</span>
+                </>
+              ) : faceDetected && eyesDetected ? (
                 <>
                   <Eye className="h-3.5 w-3.5 text-emerald-400" />
-                  <span className="text-emerald-300 font-medium">Face & Eyes Detected</span>
+                  <span className="text-emerald-300 font-medium">Face & Eyes Detected (Focused)</span>
                 </>
               ) : faceDetected ? (
                 <>
-                  <UserCheck className="h-3.5 w-3.5 text-amber-400" />
-                  <span className="text-amber-300 font-medium">Face Detected (Eyes Unclear)</span>
+                  <EyeOff className="h-3.5 w-3.5 text-amber-400" />
+                  <span className="text-amber-300 font-medium">Face Detected (Looking Away)</span>
                 </>
               ) : (
                 <>
                   <UserX className="h-3.5 w-3.5 text-rose-400" />
-                  <span className="text-rose-300 font-medium">No Face Detected</span>
+                  <span className="text-rose-300 font-medium">No Person Detected</span>
                 </>
               )}
             </div>
@@ -767,13 +1011,23 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
               </div>
             )}
 
-            {/* Refocus Alarm Pulsing Badge */}
-            {alarmActive && (
+            {/* Refocus Alarm / Grace Countdown Badges */}
+            {multipleFacesDetected ? (
+              <div className="absolute top-3 right-3 bg-rose-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse shadow-lg text-xs font-bold z-10">
+                <ShieldAlert className="h-4 w-4 animate-bounce" />
+                <span>MULTIPLE PEOPLE DETECTED!</span>
+              </div>
+            ) : alarmActive ? (
               <div className="absolute top-3 right-3 bg-rose-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse shadow-lg text-xs font-bold z-10">
                 <Bell className="h-4 w-4 animate-bounce" />
-                <span>LOOK AT SCREEN!</span>
+                <span>LOOK AT SCREEN! (Alarm Active)</span>
               </div>
-            )}
+            ) : distractedSeconds > 0 && distractedSeconds < 5 ? (
+              <div className="absolute top-3 right-3 bg-amber-500/90 text-black px-2.5 py-1 rounded-md flex items-center gap-1.5 text-xs font-medium shadow-md z-10">
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-900 animate-ping" />
+                <span>Looking away: {distractedSeconds}s / 5s</span>
+              </div>
+            ) : null}
           </>
         )}
       </div>
@@ -798,7 +1052,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={stopVisionPipeline}
+                onClick={() => stopVisionPipeline("user_dismiss")}
                 className="text-xs h-7 text-muted-foreground hover:bg-destructive/10"
               >
                 Dismiss
@@ -813,11 +1067,19 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         <div className="p-3.5 rounded-xl border border-border/50 bg-background/60 backdrop-blur-sm space-y-3">
           {alarmActive && (
             <div className="bg-rose-500/15 border border-rose-500/40 rounded-lg p-3 flex items-start gap-3">
-              <Bell className="h-5 w-5 text-rose-400 mt-0.5 animate-bounce flex-shrink-0" />
+              {multipleFacesDetected ? (
+                <ShieldAlert className="h-5 w-5 text-rose-400 mt-0.5 animate-bounce flex-shrink-0" />
+              ) : (
+                <Bell className="h-5 w-5 text-rose-400 mt-0.5 animate-bounce flex-shrink-0" />
+              )}
               <div className="text-xs">
-                <p className="text-rose-400 font-bold">Distraction Alert Active</p>
+                <p className="text-rose-400 font-bold">
+                  {multipleFacesDetected ? "Multiple Person Violation" : "Distraction Alert Active (5s+ elapsed)"}
+                </p>
                 <p className="text-muted-foreground mt-0.5">
-                  Look directly at the screen for 2 seconds to dismiss the alarm.
+                  {multipleFacesDetected
+                    ? "Two or more people detected in frame. Only 1 person permitted during Focus Mode."
+                    : "Return your face and eyes to the screen to automatically silence the alarm."}
                 </p>
               </div>
             </div>
@@ -825,7 +1087,19 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {focusState.isFocused ? (
+              {multipleFacesDetected ? (
+                <>
+                  <div className="p-2 rounded-lg bg-rose-500/15 text-rose-400">
+                    <Users className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <span className="font-semibold text-sm text-rose-400">Distracted (Multiple People)</span>
+                    <p className="text-[11px] text-muted-foreground">
+                      {detectedFaceCount} people in frame — alarm active
+                    </p>
+                  </div>
+                </>
+              ) : focusState.isFocused ? (
                 <>
                   <div className="p-2 rounded-lg bg-emerald-500/15 text-emerald-400">
                     <CheckCircle2 className="h-5 w-5" />
@@ -833,7 +1107,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
                   <div>
                     <span className="font-semibold text-sm text-emerald-400">Deep Focus Verified</span>
                     <p className="text-[11px] text-muted-foreground">
-                      {alarmActive ? `Holding focus... ${focusedTimeRef.current}s` : "Optimal posture & screen gaze"}
+                      Face & eyes looking directly at screen
                     </p>
                   </div>
                 </>
@@ -845,7 +1119,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
                   <div>
                     <span className="font-semibold text-sm text-amber-400">Distraction Detected</span>
                     <p className="text-[11px] text-muted-foreground">
-                      {distractedTimeRef.current}s away from study focus
+                      {distractedSeconds < 5
+                        ? `Looking away: ${distractedSeconds}s / 5s (alarm triggers at 5s)`
+                        : `${distractedSeconds}s away — look at screen to stop alarm`}
                     </p>
                   </div>
                 </>
@@ -864,7 +1140,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
             <Button
               variant="outline"
               size="sm"
-              onClick={stopVisionPipeline}
+              onClick={() => stopVisionPipeline("user_stop")}
               className="gap-1.5 text-xs h-7 border-rose-500/30 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
             >
               <CameraOff className="w-3.5 h-3.5" />

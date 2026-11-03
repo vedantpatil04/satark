@@ -34,7 +34,7 @@ export const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         } catch {
           // Keep default
         }
-      } else if (window.location.hostname && window.location.hostname !== "localhost") {
+      } else if (window.location.hostname) {
         setHostIp(window.location.hostname);
         setUseHttps(window.location.protocol === "https:");
       }

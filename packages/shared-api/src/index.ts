@@ -8,4 +8,6 @@ export * from "./alerts";
 export * from "./notifications";
 export * from "./questionBanks";
 export * from "./media";
+export * from "./compiler";
+export * from "./notes";
 

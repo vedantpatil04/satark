@@ -79,13 +79,18 @@ data/*.log
 storage/evidence/*
 storage/uploads/*
 storage/exports/*
+storage/class_notes/*
 !storage/evidence/.gitkeep
 !storage/uploads/.gitkeep
 !storage/exports/.gitkeep
+!storage/class_notes/.gitkeep
 
 # TLS / SSL Private Keys
 *.key
 certs/*.key
+certs/*.pem
+certs/key.pem
+certs/cert.pem
 
 # Misc
 *.swp

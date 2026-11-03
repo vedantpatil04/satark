@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   Monitor,
+  Camera,
   Maximize2,
   Minimize2,
   AlertTriangle,
@@ -18,7 +19,6 @@ import {
   Filter,
   CheckCircle,
   Eye,
-  EyeOff,
   ArrowLeft,
   RefreshCw,
   SlidersHorizontal,
@@ -27,7 +27,8 @@ import {
   Laptop,
   Check,
   X,
-  Volume2
+  Layers,
+  Smartphone
 } from "lucide-react";
 import { toast } from "sonner";
 import { examsApi, mediaApi, alertsApi, type ExamSession } from "@satark/shared-api";
@@ -38,9 +39,15 @@ import type {
 } from "@satark/shared-types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+
+interface StudentStreamBundle {
+  screen?: MediaStream;
+  camera?: MediaStream;
+  activeMode: "screen" | "camera" | "pip";
+}
 
 export const LiveMonitoring: React.FC = () => {
   const { examId, id } = useParams<{ examId?: string; id?: string }>();
@@ -76,8 +83,13 @@ export const LiveMonitoring: React.FC = () => {
 
   // Native WebRTC Peer Connections & Video Streams (Up to 5 concurrent streams)
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
-  const [studentStreams, setStudentStreams] = useState<Record<string, MediaStream>>({});
+  const pendingCandidates = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const offerMetadata = useRef<Map<string, any>>(new Map());
+  const [studentStreams, setStudentStreams] = useState<Record<string, StudentStreamBundle>>({});
+  const [streamHealth, setStreamHealth] = useState<Record<string, { screenPlaying?: boolean; cameraPlaying?: boolean }>>({});
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const cameraVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
+  const tileRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // 1. Fetch initial overview & exam metadata
   const fetchOverview = async () => {
@@ -107,7 +119,7 @@ export const LiveMonitoring: React.FC = () => {
 
   useEffect(() => {
     fetchOverview();
-    const interval = setInterval(fetchOverview, 10000); // Polling sync fallback
+    const interval = setInterval(fetchOverview, 8000); // Polling sync fallback
     return () => clearInterval(interval);
   }, [activeExamId]);
 
@@ -129,12 +141,23 @@ export const LiveMonitoring: React.FC = () => {
     };
   }, [activeExamId]);
 
-  // Attach MediaStreams to video elements
+  // Attach MediaStreams to video elements (Screen is strictly primary)
   useEffect(() => {
-    Object.entries(studentStreams).forEach(([identity, stream]) => {
-      const el = videoRefs.current[identity];
-      if (el && el.srcObject !== stream) {
-        el.srcObject = stream;
+    Object.entries(studentStreams).forEach(([identity, bundle]) => {
+      // Main video element: Always student screen stream when available
+      const mainEl = videoRefs.current[identity];
+      const activeStream = bundle.screen || bundle.camera;
+
+      if (mainEl && activeStream && mainEl.srcObject !== activeStream) {
+        mainEl.srcObject = activeStream;
+        mainEl.play().catch((err) => console.warn("Auto-play main video stream caught:", err));
+      }
+
+      // Optional webcam PiP inset: only when camera is active alongside screen
+      const camEl = cameraVideoRefs.current[identity];
+      if (camEl && bundle.camera && camEl.srcObject !== bundle.camera) {
+        camEl.srcObject = bundle.camera;
+        camEl.play().catch((err) => console.warn("Auto-play webcam PiP stream caught:", err));
       }
     });
   }, [studentStreams, overview?.students, expandedStudentId]);
@@ -145,18 +168,24 @@ export const LiveMonitoring: React.FC = () => {
     onMessage: async (msg) => {
       if (msg.exam_id && msg.exam_id !== activeExamId) return;
 
-      // WebRTC Offer from Student Screen Sharing
+      // WebRTC Offer from Student Screen/Camera Sharing
       if (msg.type === "webrtc_offer") {
         const studentId = msg.student_id || msg.sender_id;
+        const streamType = msg.stream_type || "screen";
         if (!studentId) return;
 
         try {
+          // Store offer metadata for accurate track demuxing
+          offerMetadata.current.set(studentId, msg);
+
           if (peerConnections.current.has(studentId)) {
             peerConnections.current.get(studentId)?.close();
           }
 
           const pc = new RTCPeerConnection({
-            iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }],
+            iceServers: [
+              { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+            ],
           });
           peerConnections.current.set(studentId, pc);
 
@@ -172,12 +201,69 @@ export const LiveMonitoring: React.FC = () => {
           };
 
           pc.ontrack = (event) => {
-            if (event.streams && event.streams[0]) {
-              setStudentStreams((prev) => ({
-                ...prev,
-                [studentId]: event.streams[0],
-              }));
-            }
+            const meta = offerMetadata.current.get(studentId) || {};
+            const track = event.track;
+            const trackId = track.id;
+            const streamId = event.streams && event.streams[0] ? event.streams[0].id : "";
+            const contentHint = track.contentHint;
+            const trackLabel = (track.label || "").toLowerCase();
+
+            // Create dedicated MediaStream with this single track to prevent stream contamination
+            const incomingStream = new MediaStream([track]);
+
+            setStudentStreams((prev) => {
+              const current = prev[studentId] || { activeMode: "pip" };
+
+              // Disambiguate Camera vs Screen
+              let isCamera = false;
+              if (meta.camera_track_id && trackId === meta.camera_track_id) {
+                isCamera = true;
+              } else if (meta.screen_track_id && trackId === meta.screen_track_id) {
+                isCamera = false;
+              } else if (meta.camera_stream_id && streamId === meta.camera_stream_id) {
+                isCamera = true;
+              } else if (meta.screen_stream_id && streamId === meta.screen_stream_id) {
+                isCamera = false;
+              } else if (contentHint === "motion" || streamType === "camera") {
+                isCamera = true;
+              } else if (contentHint === "detail" || streamType === "screen") {
+                isCamera = false;
+              } else if (
+                trackLabel.includes("camera") ||
+                trackLabel.includes("webcam") ||
+                trackLabel.includes("user") ||
+                trackLabel.includes("front") ||
+                trackLabel.includes("integrated")
+              ) {
+                isCamera = true;
+              } else if (current.screen && !current.camera) {
+                // Screen already set, subsequent track is camera
+                isCamera = true;
+              } else if (current.camera && !current.screen) {
+                // Camera already set, subsequent track is screen
+                isCamera = false;
+              }
+
+              if (isCamera) {
+                return {
+                  ...prev,
+                  [studentId]: {
+                    ...current,
+                    camera: incomingStream,
+                    activeMode: "pip",
+                  },
+                };
+              } else {
+                return {
+                  ...prev,
+                  [studentId]: {
+                    ...current,
+                    screen: incomingStream,
+                    activeMode: current.camera ? "pip" : "screen",
+                  },
+                };
+              }
+            });
           };
 
           pc.onconnectionstatechange = () => {
@@ -191,11 +277,28 @@ export const LiveMonitoring: React.FC = () => {
                 delete updated[studentId];
                 return updated;
               });
+              setStreamHealth((prev) => {
+                const updated = { ...prev };
+                delete updated[studentId];
+                return updated;
+              });
               peerConnections.current.delete(studentId);
             }
           };
 
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+
+          // Drain queued ICE candidates
+          const queued = pendingCandidates.current.get(studentId) || [];
+          for (const cand of queued) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            } catch (err) {
+              console.warn("Error adding queued ICE candidate:", err);
+            }
+          }
+          pendingCandidates.current.delete(studentId);
+
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
 
@@ -210,13 +313,18 @@ export const LiveMonitoring: React.FC = () => {
         }
       } else if (msg.type === "ice_candidate") {
         const studentId = msg.student_id || msg.sender_id;
+        if (!studentId || !msg.candidate) return;
         const pc = peerConnections.current.get(studentId);
-        if (pc && msg.candidate) {
+        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
           try {
             await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
           } catch (e) {
             console.warn("ICE candidate add notice:", e);
           }
+        } else {
+          const list = pendingCandidates.current.get(studentId) || [];
+          list.push(msg.candidate);
+          pendingCandidates.current.set(studentId, list);
         }
       } else if (msg.type === "screen_share_stopped") {
         const studentId = msg.student_id || msg.sender_id;
@@ -229,6 +337,11 @@ export const LiveMonitoring: React.FC = () => {
           delete updated[studentId];
           return updated;
         });
+        setStreamHealth((prev) => {
+          const updated = { ...prev };
+          delete updated[studentId];
+          return updated;
+        });
       } else if (msg.type === "student_stream_state") {
         setOverview((prev) => {
           if (!prev) return prev;
@@ -237,23 +350,24 @@ export const LiveMonitoring: React.FC = () => {
               return {
                 ...st,
                 is_sharing_screen: msg.is_sharing_screen,
+                is_camera_streaming: msg.is_camera_streaming ?? st.is_camera_streaming,
                 share_status: (msg.is_sharing_screen ? "sharing" : "stopped") as "sharing" | "stopped",
               };
             }
             return st;
           });
-          const streamers = updated.filter((s) => s.is_sharing_screen).length;
+          const streamers = updated.filter((s) => s.is_sharing_screen || s.is_camera_streaming).length;
           return { ...prev, students: updated, active_streamers: streamers };
         });
 
-        if (msg.is_sharing_screen) {
-          toast.success(`${msg.student_name} approved and started screen sharing`);
+        if (msg.is_sharing_screen || msg.is_camera_streaming) {
+          toast.success(`${msg.student_name} approved and started live streaming`);
         } else {
-          toast.info(`${msg.student_name} stopped screen sharing`);
+          toast.info(`${msg.student_name} stopped live stream`);
         }
       } else if (msg.type === "screen_share_consent_response") {
         toast[msg.approved ? "success" : "warning"](
-          `${msg.student_name} ${msg.approved ? "accepted" : "declined"} screen sharing request`
+          `${msg.student_name} ${msg.approved ? "accepted" : "declined"} media stream request`
         );
         fetchOverview();
       } else if (msg.type === "integrity_alert") {
@@ -262,7 +376,7 @@ export const LiveMonitoring: React.FC = () => {
         });
         fetchOverview();
       } else if (msg.type === "student_submission") {
-        toast.info(`Student submission received: ${msg.student_name}`);
+        toast.info(`Candidate submission received: ${msg.student_name}`);
         fetchOverview();
       }
     },
@@ -272,7 +386,11 @@ export const LiveMonitoring: React.FC = () => {
   const handleRequestAllShare = async () => {
     try {
       await mediaApi.requestShare(activeExamId);
-      toast.success("Broadcasted screen-sharing request to all enrolled students");
+      sendSocketMessage({
+        type: "screen_share_request",
+        exam_id: activeExamId,
+      });
+      toast.success("Broadcasted stream request to all participating students");
       fetchOverview();
     } catch (err: any) {
       toast.error(err?.message || "Failed to request screen sharing");
@@ -282,10 +400,49 @@ export const LiveMonitoring: React.FC = () => {
   const handleRequestIndividualShare = async (studentId: string, studentName: string) => {
     try {
       await mediaApi.requestShare(activeExamId, studentId);
+      sendSocketMessage({
+        type: "screen_share_request",
+        student_id: studentId,
+        exam_id: activeExamId,
+      });
       toast.success(`Screen share request sent to ${studentName}`);
       fetchOverview();
     } catch (err: any) {
       toast.error(err?.message || "Failed to request screen sharing");
+    }
+  };
+
+  const handleToggleStreamMode = (studentId: string) => {
+    setStudentStreams((prev) => {
+      const bundle = prev[studentId];
+      if (!bundle) return prev;
+      const modes: Array<"screen" | "camera" | "pip"> = [];
+      if (bundle.screen) modes.push("screen");
+      if (bundle.camera) modes.push("camera");
+      if (bundle.screen && bundle.camera) modes.push("pip");
+
+      if (modes.length <= 1) return prev;
+      const currIdx = modes.indexOf(bundle.activeMode);
+      const nextMode = modes[(currIdx + 1) % modes.length];
+
+      return {
+        ...prev,
+        [studentId]: {
+          ...bundle,
+          activeMode: nextMode,
+        },
+      };
+    });
+  };
+
+  const handleTileFullscreen = (studentId: string) => {
+    const tileEl = tileRefs.current[studentId];
+    if (tileEl) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        tileEl.requestFullscreen().catch(() => {});
+      }
     }
   };
 
@@ -357,7 +514,6 @@ export const LiveMonitoring: React.FC = () => {
     if (!overview?.students) return [];
     return overview.students
       .filter((st) => {
-        // Search filter
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase();
           const matchName = st.student_name.toLowerCase().includes(q);
@@ -365,15 +521,12 @@ export const LiveMonitoring: React.FC = () => {
           const matchEmail = st.email.toLowerCase().includes(q);
           if (!matchName && !matchRoll && !matchEmail) return false;
         }
-        // Status filter
         if (statusFilter === "connected" && st.connection_status !== "connected") return false;
         if (statusFilter === "offline" && st.connection_status === "connected") return false;
 
-        // Sharing filter
-        if (sharingFilter === "sharing" && !st.is_sharing_screen) return false;
-        if (sharingFilter === "not_sharing" && st.is_sharing_screen) return false;
+        if (sharingFilter === "sharing" && !st.is_sharing_screen && !st.is_camera_streaming) return false;
+        if (sharingFilter === "not_sharing" && (st.is_sharing_screen || st.is_camera_streaming)) return false;
 
-        // Alert filter
         if (alertFilter === "alerts_only" && st.alert_count === 0) return false;
         if (alertFilter === "clean" && st.alert_count > 0) return false;
 
@@ -386,13 +539,13 @@ export const LiveMonitoring: React.FC = () => {
       });
   }, [overview?.students, searchQuery, statusFilter, sharingFilter, alertFilter, sortBy]);
 
-  // Adaptive Grid Column Count Calculator
+  // Adaptive Grid Column Count Calculator (Optimized for up to 5 concurrent streams)
   const gridColsClass = useMemo(() => {
     const count = displayedStudents.length;
     if (count <= 1) return "grid-cols-1";
     if (count === 2) return "grid-cols-1 sm:grid-cols-2";
     if (count <= 4) return "grid-cols-1 sm:grid-cols-2";
-    if (count <= 9) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+    if (count <= 6) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
     return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
   }, [displayedStudents.length]);
 
@@ -409,20 +562,20 @@ export const LiveMonitoring: React.FC = () => {
   };
 
   return (
-    <div className="p-6 max-w-[1600px] mx-auto space-y-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6 pb-8">
       {/* Top Header & Exam Status Bar */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-card border border-border p-5 rounded-2xl shadow-sm">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white border border-stone-200/80 p-5 rounded-3xl shadow-xs">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <Link to="/teacher/exams" className="text-muted-foreground hover:text-foreground p-1">
-              <ArrowLeft className="w-5 h-5" />
+            <Link to="/teacher/exams" className="text-stone-400 hover:text-slate-800 p-1">
+              <ArrowLeft className="w-5 h-5 text-[#D97706]" />
             </Link>
-            <div className="p-2 bg-primary/10 text-primary rounded-xl">
-              <Radio className="w-5 h-5 animate-pulse text-rose-500" />
+            <div className="w-10 h-10 rounded-xl bg-[#FFF2E5] text-[#D97706] flex items-center justify-center font-black shrink-0">
+              <Radio className="w-5 h-5 animate-pulse text-[#D97706]" />
             </div>
             <div>
               <div className="flex items-center gap-2.5">
-                <h1 className="text-xl font-bold tracking-tight text-foreground">{overview?.title || "Live Examination"}</h1>
+                <h1 className="text-xl font-extrabold tracking-tight text-slate-900">{overview?.title || "Live Examination"}</h1>
                 <Badge
                   variant={
                     exam?.status === "active"
@@ -431,47 +584,56 @@ export const LiveMonitoring: React.FC = () => {
                       ? "secondary"
                       : "outline"
                   }
-                  className={`text-xs uppercase font-bold ${
+                  className={`text-xs uppercase font-bold rounded-lg ${
                     exam?.status === "active" ? "bg-emerald-600 hover:bg-emerald-600 text-white" : ""
                   }`}
                 >
                   {exam?.status || "Live"}
                 </Badge>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Room: <span className="font-mono text-primary font-semibold">{overview?.room_name || "satark-room"}</span> • Code:{" "}
-                <span className="font-mono font-bold text-foreground">{overview?.exam_code}</span>
+              <p className="text-xs text-stone-500">
+                Room: <span className="font-mono text-[#D97706] font-semibold">{overview?.room_name || "satark-room"}</span> • PIN:{" "}
+                <span className="font-mono font-bold text-slate-900">{overview?.exam_code}</span>
               </p>
             </div>
           </div>
         </div>
 
-        {/* Live Countdown & Controls */}
-        <div className="flex flex-wrap items-center gap-3">
+        {/* Live Countdown, LAN Hub Badge & Controls */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Native WebRTC LAN Status Badge */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#EAF8F0] border border-[#D5F2E2] text-[#1E7E51] text-xs font-semibold">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span>Native WebRTC LAN</span>
+            <Badge variant="outline" className="text-[10px] uppercase font-bold border-emerald-300 ml-1 bg-white">
+              Offline P2P
+            </Badge>
+          </div>
+
           {/* Countdown timer pill */}
-          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-muted/50 border border-border">
-            <Clock className="w-4 h-4 text-primary" />
-            <span className="text-xs text-muted-foreground font-medium">Time Remaining:</span>
-            <span className="font-mono font-bold text-base text-foreground tracking-wide">
+          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#FFF9F2] border border-amber-200 text-[#D97706]">
+            <Clock className="w-3.5 h-3.5" />
+            <span className="text-[11px] font-semibold">Remaining:</span>
+            <span className="font-mono font-black text-sm tracking-wide">
               {formatTimer(remainingSeconds)}
             </span>
           </div>
 
-          <Button variant="outline" size="sm" onClick={() => setShowBroadcastModal(true)} className="gap-1.5 text-xs">
-            <Megaphone className="w-4 h-4 text-primary" /> Broadcast
+          <Button variant="outline" size="sm" onClick={() => setShowBroadcastModal(true)} className="gap-1.5 text-xs rounded-xl bg-white border-stone-200 hover:bg-stone-50 h-8 font-medium">
+            <Megaphone className="w-3.5 h-3.5 text-[#D97706]" /> Broadcast
           </Button>
 
-          <Button variant="outline" size="sm" onClick={() => setShowGrantTimeModal(true)} className="gap-1.5 text-xs">
-            <PlusCircle className="w-4 h-4 text-emerald-500" /> Grant Time
+          <Button variant="outline" size="sm" onClick={() => setShowGrantTimeModal(true)} className="gap-1.5 text-xs rounded-xl bg-white border-stone-200 hover:bg-stone-50 h-8 font-medium">
+            <PlusCircle className="w-3.5 h-3.5 text-emerald-600" /> Grant Time
           </Button>
 
           {exam?.status === "active" ? (
-            <Button variant="outline" size="sm" onClick={handlePauseResume} className="gap-1.5 text-xs text-amber-500 hover:text-amber-600">
-              <Pause className="w-4 h-4" /> Pause
+            <Button variant="outline" size="sm" onClick={handlePauseResume} className="gap-1.5 text-xs rounded-xl bg-white border-stone-200 hover:bg-stone-50 h-8 text-amber-600 font-medium">
+              <Pause className="w-3.5 h-3.5" /> Pause
             </Button>
           ) : exam?.status === "paused" ? (
-            <Button variant="outline" size="sm" onClick={handlePauseResume} className="gap-1.5 text-xs text-emerald-500 hover:text-emerald-600">
-              <Play className="w-4 h-4" /> Resume
+            <Button variant="outline" size="sm" onClick={handlePauseResume} className="gap-1.5 text-xs rounded-xl bg-white border-stone-200 hover:bg-stone-50 h-8 text-emerald-600 font-medium">
+              <Play className="w-3.5 h-3.5" /> Resume
             </Button>
           ) : null}
 
@@ -479,100 +641,87 @@ export const LiveMonitoring: React.FC = () => {
             variant="destructive"
             size="sm"
             onClick={() => setShowEndExamConfirm(true)}
-            className="gap-1.5 text-xs"
+            className="gap-1.5 text-xs rounded-xl h-8 font-semibold bg-rose-600 hover:bg-rose-700 shadow-xs"
           >
-            <StopCircle className="w-4 h-4" /> End Exam
+            <StopCircle className="w-3.5 h-3.5" /> End Exam
           </Button>
         </div>
       </div>
 
-      {/* SFU Configuration Notice Banner (if unconfigured) */}
-      {overview && !overview.is_livekit_configured && (
-        <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-600 dark:text-amber-400">
-          <div className="flex items-center gap-2 font-medium">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <span>
-              LiveKit SFU not configured: Set <code>LIVEKIT_URL</code>, <code>LIVEKIT_API_KEY</code>, and <code>LIVEKIT_API_SECRET</code> in the backend environment to enable live WebRTC video streams.
-            </span>
-          </div>
-          <Badge variant="outline" className="text-[10px] uppercase font-bold shrink-0 border-amber-500/40">
-            Setup Required
-          </Badge>
-        </div>
-      )}
-
-      {/* Metrics Row */}
+      {/* Signature Pastel Metrics Row */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
-        <Card className="border-border p-3.5 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-primary/10 text-primary">
-            <UserCheck className="w-5 h-5" />
+        <div className="rounded-2xl bg-[#EAF8F0] border border-[#D5F2E2] p-4 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-white text-emerald-700 flex items-center justify-center shadow-xs shrink-0">
+            <UserCheck className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-xl font-bold text-foreground">{overview?.total_enrolled || 0}</div>
-            <div className="text-[11px] text-muted-foreground font-medium">Total Enrolled</div>
+            <div className="text-xl font-extrabold text-slate-900">{overview?.total_enrolled || 0}</div>
+            <div className="text-[11px] text-emerald-800 font-medium">Total Enrolled</div>
           </div>
-        </Card>
+        </div>
 
-        <Card className="border-border p-3.5 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-500">
-            <Monitor className="w-5 h-5" />
+        <div className="rounded-2xl bg-[#FEF3E8] border border-[#FDE5CC] p-4 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-white text-[#D97706] flex items-center justify-center shadow-xs shrink-0">
+            <Monitor className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-xl font-bold text-foreground">{overview?.active_streamers || 0}</div>
-            <div className="text-[11px] text-muted-foreground font-medium">Screens Streaming</div>
+            <div className="text-xl font-extrabold text-slate-900">
+              {overview?.active_streamers || Object.values(studentStreams).filter((s) => s.screen).length}
+            </div>
+            <div className="text-[11px] text-amber-800 font-medium">Screens Live (Max 5)</div>
           </div>
-        </Card>
+        </div>
 
-        <Card className="border-border p-3.5 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
-            <Wifi className="w-5 h-5" />
+        <div className="rounded-2xl bg-[#EEF2FC] border border-[#DDE6F8] p-4 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-white text-blue-700 flex items-center justify-center shadow-xs shrink-0">
+            <Wifi className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-xl font-bold text-foreground">{overview?.connected_count || 0}</div>
-            <div className="text-[11px] text-muted-foreground font-medium">Devices Connected</div>
+            <div className="text-xl font-extrabold text-slate-900">{overview?.connected_count || 0}</div>
+            <div className="text-[11px] text-blue-800 font-medium">Connected</div>
           </div>
-        </Card>
+        </div>
 
-        <Card className="border-border p-3.5 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-muted text-muted-foreground">
-            <WifiOff className="w-5 h-5" />
+        <div className="rounded-2xl bg-[#F6F5F2] border border-stone-200 p-4 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-white text-stone-600 flex items-center justify-center shadow-xs shrink-0">
+            <WifiOff className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-xl font-bold text-foreground">
+            <div className="text-xl font-extrabold text-slate-900">
               {Math.max(0, (overview?.total_enrolled || 0) - (overview?.connected_count || 0))}
             </div>
-            <div className="text-[11px] text-muted-foreground font-medium">Offline / Pending</div>
+            <div className="text-[11px] text-stone-600 font-medium">Offline / Idle</div>
           </div>
-        </Card>
+        </div>
 
-        <Card className="border-border p-3.5 flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-rose-500/10 text-rose-500">
-            <ShieldAlert className="w-5 h-5" />
+        <div className="rounded-2xl bg-[#FDF2F2] border border-rose-200 p-4 flex items-center gap-3 col-span-2 sm:col-span-1">
+          <div className="w-9 h-9 rounded-xl bg-white text-rose-600 flex items-center justify-center shadow-xs shrink-0">
+            <ShieldAlert className="w-4 h-4" />
           </div>
           <div>
-            <div className="text-xl font-bold text-foreground">{overview?.total_alerts || 0}</div>
-            <div className="text-[11px] text-muted-foreground font-medium">Integrity Alerts</div>
+            <div className="text-xl font-extrabold text-slate-900">{overview?.total_alerts || 0}</div>
+            <div className="text-[11px] text-rose-800 font-medium">Integrity Alerts</div>
           </div>
-        </Card>
+        </div>
       </div>
 
       {/* Control & Filter Toolbar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-card border border-border p-3 rounded-xl">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-stone-200/80 p-3 rounded-2xl shadow-xs">
         <div className="flex flex-wrap items-center gap-2 flex-1">
-          <div className="relative w-full sm:w-64">
-            <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
-            <Input
-              placeholder="Search by student or roll..."
+          <div className="relative w-full sm:w-60">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-stone-400" />
+            <input
+              placeholder="Search candidate or roll..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 h-9 text-xs"
+              className="w-full pl-8 pr-3 h-8.5 text-xs bg-[#F4F4F2] border-0 rounded-full text-slate-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-[#D97706]/40"
             />
           </div>
 
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none"
+            className="h-8.5 px-3 rounded-xl border border-stone-200 bg-stone-50 text-xs text-slate-700 outline-none"
           >
             <option value="all">All Devices</option>
             <option value="connected">Connected Online</option>
@@ -582,9 +731,9 @@ export const LiveMonitoring: React.FC = () => {
           <select
             value={sharingFilter}
             onChange={(e) => setSharingFilter(e.target.value as any)}
-            className="h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none"
+            className="h-8.5 px-3 rounded-xl border border-stone-200 bg-stone-50 text-xs text-slate-700 outline-none"
           >
-            <option value="all">All Screen States</option>
+            <option value="all">All Stream States</option>
             <option value="sharing">Live Streaming</option>
             <option value="not_sharing">Not Streaming</option>
           </select>
@@ -592,7 +741,7 @@ export const LiveMonitoring: React.FC = () => {
           <select
             value={alertFilter}
             onChange={(e) => setAlertFilter(e.target.value as any)}
-            className="h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none"
+            className="h-8.5 px-3 rounded-xl border border-stone-200 bg-stone-50 text-xs text-slate-700 outline-none"
           >
             <option value="all">All Integrity Status</option>
             <option value="alerts_only">Flagged with Alerts</option>
@@ -602,71 +751,73 @@ export const LiveMonitoring: React.FC = () => {
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as any)}
-            className="h-9 px-3 rounded-lg border border-border bg-background text-xs outline-none"
+            className="h-8.5 px-3 rounded-xl border border-stone-200 bg-stone-50 text-xs text-slate-700 outline-none"
           >
-            <option value="alerts">Sort by: Alert Count</option>
-            <option value="status">Sort by: Stream State</option>
-            <option value="name">Sort by: Name</option>
+            <option value="alerts">Sort: Alert Count</option>
+            <option value="status">Sort: Stream State</option>
+            <option value="name">Sort: Candidate Name</option>
           </select>
         </div>
 
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            variant="default"
             onClick={handleRequestAllShare}
-            className="h-9 text-xs gap-1.5 bg-primary text-primary-foreground font-semibold"
+            className="h-8.5 text-xs gap-1.5 bg-[#D97706] hover:bg-[#B45309] text-white font-semibold rounded-xl shadow-xs"
           >
             <Radio className="w-3.5 h-3.5" /> Request All Screens
           </Button>
 
           <Button
             size="sm"
-            variant="ghost"
+            variant="outline"
             onClick={() => setViewMode(viewMode === "grid" ? "compact" : "grid")}
-            className="h-9 text-xs"
+            className="h-8.5 text-xs rounded-xl border-stone-200 bg-white hover:bg-stone-50 text-stone-700"
           >
-            {viewMode === "grid" ? "Compact View" : "Grid View"}
+            {viewMode === "grid" ? "Compact" : "Grid"}
           </Button>
         </div>
       </div>
 
-      {/* Adaptive Student Monitoring Grid */}
+      {/* Adaptive Student Monitoring Grid (Supports up to 5 concurrent WebRTC streams) */}
       {displayedStudents.length === 0 ? (
-        <Card className="border-border p-12 text-center text-muted-foreground">
+        <div className="rounded-3xl border border-stone-200/80 bg-white p-12 text-center text-stone-400">
           <Monitor className="w-12 h-12 mx-auto mb-3 opacity-25" />
-          <p className="text-base font-semibold">No student workstations matched filters</p>
-          <p className="text-xs text-muted-foreground mt-1">Adjust search query or filter selectors above.</p>
-        </Card>
+          <p className="text-base font-semibold text-slate-800">No student workstations matched filters</p>
+          <p className="text-xs text-stone-400 mt-1">Adjust search query or filter selectors above.</p>
+        </div>
       ) : (
         <div className={`grid ${gridColsClass} gap-4`}>
           {displayedStudents.map((student) => {
-            const hasActiveStream = Boolean(studentStreams[student.student_id]);
+            const bundle = studentStreams[student.student_id];
+            const hasActiveStream = Boolean(bundle?.screen || bundle?.camera);
             const isOnline = student.connection_status === "connected";
             const hasAlerts = student.alert_count > 0;
+            const isAndroid = (student.os_type || "").toLowerCase().includes("android") || (student.device_hostname || "").toLowerCase().includes("android");
 
             return (
               <Card
                 key={student.student_id}
-                className={`overflow-hidden border transition-all flex flex-col justify-between ${
+                ref={(el) => (tileRefs.current[student.student_id] = el)}
+                className={`overflow-hidden rounded-2xl bg-white border transition-all flex flex-col justify-between shadow-xs hover:shadow-md ${
                   hasAlerts
-                    ? "border-rose-500/60 shadow-sm"
+                    ? "border-rose-400/80 ring-1 ring-rose-400/30"
                     : isOnline
-                    ? "border-border hover:border-primary/50"
-                    : "border-border/60 opacity-80"
+                    ? "border-stone-200/90 hover:border-amber-400"
+                    : "border-stone-200/60 opacity-80"
                 }`}
               >
                 {/* Tile Header */}
-                <div className="p-3 border-b border-border bg-card/60 flex items-center justify-between gap-2">
+                <div className="p-3 border-b border-stone-100 bg-[#FCFBF8] flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        isOnline ? "bg-emerald-500" : "bg-muted-foreground/50"
+                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        isOnline ? "bg-emerald-500" : "bg-stone-300"
                       }`}
                     />
                     <div className="min-w-0">
-                      <div className="font-bold text-xs truncate text-foreground">{student.student_name}</div>
-                      <div className="text-[10px] text-muted-foreground truncate font-mono">
+                      <div className="font-bold text-xs truncate text-slate-900">{student.student_name}</div>
+                      <div className="text-[10px] text-stone-400 truncate font-mono">
                         Roll: {student.roll_number}
                       </div>
                     </div>
@@ -674,88 +825,224 @@ export const LiveMonitoring: React.FC = () => {
 
                   <div className="flex items-center gap-1.5 shrink-0">
                     {hasAlerts && (
-                      <Badge variant="destructive" className="text-[10px] h-5 px-1.5 font-bold gap-1">
-                        <AlertTriangle className="w-3 h-3" /> {student.alert_count}
+                      <Badge variant="destructive" className="text-[10px] h-5 px-1.5 font-bold gap-1 bg-rose-50 text-rose-700 border-rose-200">
+                        <AlertTriangle className="w-3 h-3 text-rose-600" /> {student.alert_count}
                       </Badge>
                     )}
-                    <Badge variant="outline" className="text-[10px] h-5 px-1.5 font-mono capitalize">
+                    <Badge variant="outline" className="text-[10px] h-5 px-1.5 font-mono capitalize bg-white text-stone-600 border-stone-200">
+                      {isAndroid ? <Smartphone className="w-2.5 h-2.5 text-emerald-500" /> : <Laptop className="w-2.5 h-2.5" />}
                       {student.os_type || "browser"}
                     </Badge>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setExpandedStudentId(student.student_id)}
-                      className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-                      title="Expand Live View"
+                      onClick={() => handleTileFullscreen(student.student_id)}
+                      className="h-6 w-6 p-0 text-stone-400 hover:text-slate-800"
+                      title="Fullscreen Stream Tile"
                     >
                       <Maximize2 className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setExpandedStudentId(student.student_id)}
+                      className="h-6 w-6 p-0 text-stone-400 hover:text-slate-800"
+                      title="Expand Details"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
                     </Button>
                   </div>
                 </div>
 
-                {/* Video / Screen Preview Area */}
-                <div className="relative aspect-video bg-black/90 flex items-center justify-center overflow-hidden">
-                  {student.is_sharing_screen ? (
+                {/* Video / Stream Preview Area (Screen, Camera, or PiP) */}
+                <div className="relative aspect-video bg-black/90 flex items-center justify-center overflow-hidden group">
+                  {hasActiveStream ? (
                     <>
-                      {/* Attached video element */}
+                      {/* Main Video Element */}
                       <video
-                        ref={(el) => (videoRefs.current[student.student_id] = el)}
+                        ref={(el) => {
+                          videoRefs.current[student.student_id] = el;
+                          const activeStream =
+                            bundle?.activeMode === "camera" && bundle?.camera
+                              ? bundle.camera
+                              : bundle?.screen || bundle?.camera;
+                          if (el && activeStream && el.srcObject !== activeStream) {
+                            el.srcObject = activeStream;
+                            el.play().catch(() => {});
+                          }
+                        }}
                         autoPlay
                         playsInline
                         muted
+                        onPlaying={() => {
+                          setStreamHealth((prev) => ({
+                            ...prev,
+                            [student.student_id]: {
+                              ...(prev[student.student_id] || {}),
+                              screenPlaying: true,
+                            },
+                          }));
+                        }}
+                        onLoadedMetadata={(e) => (e.target as HTMLVideoElement).play().catch(() => {})}
                         className="w-full h-full object-contain"
                       />
-                      <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-emerald-600/90 text-white text-[10px] font-bold tracking-wider uppercase flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" /> Live Screen
+
+                      {/* Picture-in-Picture Inset (If camera exists) */}
+                      {bundle?.camera && (
+                        <div className="absolute bottom-2 right-2 w-28 sm:w-36 aspect-video rounded-lg overflow-hidden border-2 border-primary/80 shadow-lg bg-black z-10 transition-all hover:scale-105">
+                          <video
+                            ref={(el) => {
+                              cameraVideoRefs.current[student.student_id] = el;
+                              if (el && bundle?.camera && el.srcObject !== bundle.camera) {
+                                el.srcObject = bundle.camera;
+                                el.play().catch(() => {});
+                              }
+                            }}
+                            autoPlay
+                            playsInline
+                            muted
+                            onPlaying={() => {
+                              setStreamHealth((prev) => ({
+                                ...prev,
+                                [student.student_id]: {
+                                  ...(prev[student.student_id] || {}),
+                                  cameraPlaying: true,
+                                },
+                              }));
+                            }}
+                            onLoadedMetadata={(e) => (e.target as HTMLVideoElement).play().catch(() => {})}
+                            className="w-full h-full object-cover"
+                          />
+                          <span className="absolute top-1 left-1 px-1 py-0.2 bg-black/70 text-[8px] font-mono font-bold text-white rounded">
+                            CAM
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Stream Status Overlay Badges */}
+                      <div className="absolute top-2 left-2 flex items-center gap-1.5">
+                        {bundle?.screen ? (
+                          <div
+                            className={`px-2 py-0.5 rounded text-white text-[10px] font-bold tracking-wider uppercase flex items-center gap-1 shadow-sm ${
+                              streamHealth[student.student_id]?.screenPlaying
+                                ? "bg-emerald-600/95"
+                                : "bg-amber-600/90"
+                            }`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full bg-white ${
+                                streamHealth[student.student_id]?.screenPlaying
+                                  ? "animate-ping"
+                                  : "animate-pulse"
+                              }`}
+                            />
+                            <Monitor className="w-3 h-3" />
+                            <span>
+                              {streamHealth[student.student_id]?.screenPlaying
+                                ? "Live Screen"
+                                : "Connecting..."}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="px-2 py-0.5 rounded bg-amber-500/95 text-white text-[10px] font-bold tracking-wider uppercase flex items-center gap-1 shadow-sm">
+                            <Camera className="w-3 h-3" />
+                            <span>Webcam Only (Screen Required)</span>
+                          </div>
+                        )}
+
+                        {bundle?.camera && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-white/90 text-[9px] font-mono border ${
+                              streamHealth[student.student_id]?.cameraPlaying
+                                ? "bg-black/60 border-emerald-500/50"
+                                : "bg-black/60 border-white/20"
+                            }`}
+                          >
+                            + Webcam (PiP){streamHealth[student.student_id]?.cameraPlaying ? " ✓" : ""}
+                          </span>
+                        )}
+
+                        {/* Stream Mode Switcher Button */}
+                        {(bundle?.camera && bundle?.screen) && (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleStreamMode(student.student_id)}
+                            className="px-2 py-0.5 rounded bg-black/70 hover:bg-black/90 text-white text-[10px] font-bold flex items-center gap-1 shadow-sm border border-white/20"
+                            title="Toggle Screen / Camera / PiP view"
+                          >
+                            <Layers className="w-3 h-3" />
+                            <span className="uppercase">{bundle.activeMode}</span>
+                          </button>
+                        )}
                       </div>
                     </>
                   ) : (
                     /* Clear Offline / Pending Placeholder */
                     <div className="text-center p-4 text-muted-foreground/60 space-y-1.5">
-                      <Laptop className="w-8 h-8 mx-auto opacity-30" />
+                      {isAndroid ? (
+                        <Smartphone className="w-8 h-8 mx-auto opacity-40 text-emerald-500" />
+                      ) : (
+                        <Monitor className="w-8 h-8 mx-auto opacity-30" />
+                      )}
                       <div className="text-xs font-semibold text-foreground/70">
                         {student.share_status === "pending"
-                          ? "Consent Pending..."
+                          ? "Screen Share Consent Pending..."
                           : student.share_status === "rejected"
-                          ? "Consent Declined"
+                          ? "Screen Share Declined by Student"
                           : !isOnline
-                          ? "Device Offline"
-                          : "Screen sharing not started"}
+                          ? "Workstation Offline"
+                          : isAndroid
+                          ? "Awaiting Android MediaProjection Screen Share"
+                          : "Screen share not transmitting"}
                       </div>
                       <p className="text-[10px] text-muted-foreground">
-                        {isOnline ? "Awaiting student browser approval" : "No active session"}
+                        {isOnline
+                          ? isAndroid
+                            ? "Awaiting student Android MediaProjection consent"
+                            : "Awaiting student screen selection"
+                          : "No active workstation session"}
                       </p>
 
                       {isOnline && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleRequestIndividualShare(student.student_id, student.student_name)}
-                          className="h-6 text-[10px] mt-1 border-border/80"
-                        >
-                          Request Share
-                        </Button>
+                        <div className="flex items-center justify-center gap-1.5 pt-1">
+                          <Button
+                            size="sm"
+                            onClick={() => handleRequestIndividualShare(student.student_id, student.student_name)}
+                            className="h-6 text-[10px] bg-[#D97706] hover:bg-[#B45309] text-white font-semibold rounded-lg"
+                          >
+                            <Monitor className="w-3 h-3 mr-1" /> Request Stream
+                          </Button>
+                        </div>
                       )}
                     </div>
                   )}
                 </div>
 
                 {/* Tile Footer */}
-                <div className="p-2.5 px-3 border-t border-border bg-card/40 flex items-center justify-between text-[11px] text-muted-foreground">
+                <div className="p-2.5 px-3 border-t border-stone-100 bg-[#FCFBF8] flex items-center justify-between text-[11px] text-stone-500">
                   <span className="truncate">
                     {student.last_activity_at ? (
                       <>Active: {new Date(student.last_activity_at).toLocaleTimeString()}</>
                     ) : (
-                      "No activity yet"
+                      "No activity recorded"
                     )}
                   </span>
 
-                  <button
-                    onClick={() => setExpandedStudentId(student.student_id)}
-                    className="text-primary hover:underline font-medium text-xs flex items-center gap-1"
-                  >
-                    View Details
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleTileFullscreen(student.student_id)}
+                      className="text-stone-400 hover:text-slate-800 text-xs"
+                      title="Fullscreen"
+                    >
+                      <Maximize2 className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => setExpandedStudentId(student.student_id)}
+                      className="text-[#D97706] hover:underline font-semibold text-xs flex items-center gap-1"
+                    >
+                      Telemetry
+                    </button>
+                  </div>
                 </div>
               </Card>
             );
@@ -766,17 +1053,17 @@ export const LiveMonitoring: React.FC = () => {
       {/* EXPANDED STUDENT LIVE VIEW MODAL */}
       {expandedStudent && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-2xl w-full max-w-5xl max-h-[92vh] overflow-hidden flex flex-col shadow-2xl animate-in fade-in zoom-in-95">
+          <div className="bg-white border border-stone-200/80 rounded-3xl w-full max-w-5xl max-h-[92vh] overflow-hidden flex flex-col shadow-2xl animate-in fade-in zoom-in-95">
             {/* Modal Header */}
-            <div className="p-4 px-6 border-b border-border flex items-center justify-between bg-card/60">
+            <div className="p-4 px-6 border-b border-stone-100 flex items-center justify-between bg-[#FCFBF8]">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-primary/10 text-primary rounded-xl">
-                  <Monitor className="w-5 h-5" />
+                <div className="w-9 h-9 rounded-xl bg-[#FFF2E5] text-[#D97706] flex items-center justify-center font-black shrink-0">
+                  <Monitor className="w-4 h-4 text-[#D97706]" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="font-bold text-base text-foreground">{expandedStudent.student_name}</h3>
-                    <Badge variant="outline" className="font-mono text-xs">
+                    <h3 className="font-extrabold text-base text-slate-900">{expandedStudent.student_name}</h3>
+                    <Badge variant="outline" className="font-mono text-xs bg-white text-stone-600 border-stone-200">
                       Roll: {expandedStudent.roll_number}
                     </Badge>
                     <Badge
@@ -788,25 +1075,24 @@ export const LiveMonitoring: React.FC = () => {
                       {expandedStudent.connection_status}
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">{expandedStudent.email}</p>
+                  <p className="text-xs text-stone-500">{expandedStudent.email}</p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
                 <Button
                   size="sm"
-                  variant="outline"
                   onClick={() => handleRequestIndividualShare(expandedStudent.student_id, expandedStudent.student_name)}
-                  className="text-xs h-8 gap-1.5"
+                  className="text-xs h-8 gap-1.5 bg-[#D97706] hover:bg-[#B45309] text-white font-semibold rounded-xl shadow-xs"
                 >
-                  <Radio className="w-3.5 h-3.5" /> Request Share
+                  <Monitor className="w-3.5 h-3.5" /> Request Stream
                 </Button>
 
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => setExpandedStudentId(null)}
-                  className="h-8 w-8 p-0"
+                  className="h-8 w-8 p-0 text-stone-400 hover:text-slate-800 rounded-lg"
                 >
                   <X className="w-5 h-5" />
                 </Button>
@@ -817,22 +1103,53 @@ export const LiveMonitoring: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-12 flex-1 overflow-y-auto">
               {/* Video Player Area */}
               <div className="lg:col-span-8 bg-black/95 flex items-center justify-center p-4 relative min-h-[360px]">
-                {expandedStudent.is_sharing_screen ? (
-                  <video
-                    ref={(el) => {
-                      if (el && studentStreams[expandedStudent.student_id]) {
-                        el.srcObject = studentStreams[expandedStudent.student_id];
-                      }
-                    }}
-                    autoPlay
-                    playsInline
-                    controls
-                    className="w-full h-full max-h-[500px] object-contain rounded-lg"
-                  />
+                {studentStreams[expandedStudent.student_id] ? (
+                  <div className="relative w-full h-full max-h-[500px] flex items-center justify-center">
+                    <video
+                      ref={(el) => {
+                        const b = studentStreams[expandedStudent.student_id];
+                        const s =
+                          b?.activeMode === "camera" && b?.camera
+                            ? b.camera
+                            : b?.screen || b?.camera;
+                        if (el && s && el.srcObject !== s) {
+                          el.srcObject = s;
+                          el.play().catch(() => {});
+                        }
+                      }}
+                      autoPlay
+                      playsInline
+                      muted
+                      controls
+                      className="w-full h-full object-contain rounded-lg"
+                    />
+
+                    {/* PiP Camera Inset in Modal */}
+                    {studentStreams[expandedStudent.student_id]?.camera && (
+                      <div className="absolute bottom-4 right-4 w-40 aspect-video rounded-lg overflow-hidden border-2 border-primary shadow-xl bg-black">
+                        <video
+                          ref={(el) => {
+                            const c = studentStreams[expandedStudent.student_id]?.camera;
+                            if (el && c && el.srcObject !== c) {
+                              el.srcObject = c;
+                              el.play().catch(() => {});
+                            }
+                          }}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover"
+                        />
+                        <span className="absolute top-1 left-1 px-1 py-0.2 bg-black/70 text-[8px] font-mono font-bold text-white rounded">
+                          CAM
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   <div className="text-center text-muted-foreground/60 space-y-2">
-                    <Laptop className="w-12 h-12 mx-auto opacity-30" />
-                    <p className="text-sm font-semibold text-foreground/80">Screen stream not currently transmitting</p>
+                    <Monitor className="w-12 h-12 mx-auto opacity-30" />
+                    <p className="text-sm font-semibold text-foreground/80">Candidate screen not currently transmitting</p>
                     <p className="text-xs text-muted-foreground">
                       Status: <strong>{expandedStudent.share_status}</strong>
                     </p>
@@ -857,10 +1174,12 @@ export const LiveMonitoring: React.FC = () => {
                       </div>
                     )}
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Screen Share:</span>
+                      <span className="text-muted-foreground">Stream Status:</span>
                       <span
                         className={`font-semibold capitalize ${
-                          expandedStudent.is_sharing_screen ? "text-emerald-500" : "text-muted-foreground"
+                          expandedStudent.is_sharing_screen || expandedStudent.is_camera_streaming
+                            ? "text-emerald-500"
+                            : "text-muted-foreground"
                         }`}
                       >
                         {expandedStudent.share_status}
@@ -1032,4 +1351,5 @@ export const LiveMonitoring: React.FC = () => {
     </div>
   );
 };
+
 export default LiveMonitoring;

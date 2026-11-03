@@ -3,6 +3,8 @@
 let audioContext: AudioContext | null = null;
 let alarmIntervalId: number | null = null;
 let isAlarmRunning: boolean = false;
+let activeOscillator: OscillatorNode | null = null;
+let activeGainNode: GainNode | null = null;
 
 // Gaming alarm state (separate from focus alarm)
 let gamingAlarmIntervalId: number | null = null;
@@ -20,8 +22,15 @@ export const playBeep = async (
         audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       }
 
+      if (audioContext.state === "suspended") {
+        audioContext.resume().catch(() => {});
+      }
+
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
+
+      activeOscillator = oscillator;
+      activeGainNode = gainNode;
 
       oscillator.connect(gainNode);
       gainNode.connect(audioContext.destination);
@@ -37,23 +46,30 @@ export const playBeep = async (
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + duration * 0.001);
 
-      oscillator.onended = () => resolve();
+      oscillator.onended = () => {
+        if (activeOscillator === oscillator) {
+          activeOscillator = null;
+          activeGainNode = null;
+        }
+        resolve();
+      };
     } catch (error) {
       console.error("Beep error:", error);
+      activeOscillator = null;
+      activeGainNode = null;
       reject(error);
     }
   });
 };
 
-// Continuous alarm that repeats until stopped (for face detection)
+// Continuous alarm that repeats until stopped (for face / focus detection)
 export const startContinuousAlarm = (
   frequency: number = 1200,
   beepDuration: number = 400,
   pauseDuration: number = 300
 ): void => {
-  // Prevent multiple alarms
+  // Prevent duplicate alarm chains
   if (isAlarmRunning) {
-    console.log("⚠️ Alarm already running, skipping...");
     return;
   }
 
@@ -61,12 +77,10 @@ export const startContinuousAlarm = (
   stopContinuousAlarm();
 
   isAlarmRunning = true;
-  console.log("🚨 ALARM STARTED");
 
   const playAlarmCycle = async () => {
     // Check if alarm should still be running
     if (!isAlarmRunning) {
-      console.log("🛑 Alarm stopped in cycle");
       return;
     }
 
@@ -75,7 +89,7 @@ export const startContinuousAlarm = (
 
       // Schedule next beep after pause (only if still running)
       if (isAlarmRunning) {
-        alarmIntervalId = window.setTimeout(playAlarmCycle, beepDuration + pauseDuration);
+        alarmIntervalId = window.setTimeout(playAlarmCycle, pauseDuration);
       }
     } catch (error) {
       console.error("Alarm error:", error);
@@ -86,15 +100,30 @@ export const startContinuousAlarm = (
   playAlarmCycle();
 };
 
-// Stop the continuous alarm
+// Stop the continuous alarm immediately with instant audio cutoff
 export const stopContinuousAlarm = (): void => {
-  console.log("✅ STOPPING ALARM");
   isAlarmRunning = false;
 
   if (alarmIntervalId !== null) {
     clearTimeout(alarmIntervalId);
     alarmIntervalId = null;
   }
+
+  // Instant audio cutoff: zero gain and stop active oscillator
+  try {
+    if (activeGainNode && audioContext) {
+      activeGainNode.gain.cancelScheduledValues(audioContext.currentTime);
+      activeGainNode.gain.setValueAtTime(0, audioContext.currentTime);
+    }
+    if (activeOscillator) {
+      activeOscillator.stop();
+      activeOscillator.disconnect();
+    }
+  } catch (e) {
+    // Oscillator may have already stopped naturally
+  }
+  activeOscillator = null;
+  activeGainNode = null;
 };
 
 // Check if alarm is currently playing

@@ -13,7 +13,8 @@ from backend.app.services.event_service import ingest_event_envelope
 router = APIRouter(tags=["WebSockets"])
 
 LAN_ORIGIN_PATTERN = re.compile(
-    r"^https?://(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$"
+    r"^https?://(([a-zA-Z0-9-]+\.)*(satark\.test|satark\.local)|localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$",
+    re.IGNORECASE
 )
 
 
@@ -62,12 +63,38 @@ async def websocket_teacher_endpoint(
                     "screen_share_stopped",
                     "webrtc_offer",
                     "webrtc_answer",
-                    "ice_candidate"
+                    "ice_candidate",
+                    "unlock_student"
                 ):
-                    # WebRTC Signaling from Teacher to Student
+                    # WebRTC Signaling & Proctor Controls from Teacher to Student
                     target_student = data.get("student_id") or data.get("target_user_id")
-                    if target_student:
-                        data["teacher_id"] = user_id
+                    data["teacher_id"] = user_id
+                    if msg_type == "unlock_student":
+                        if target_student:
+                            await ws_manager.send_to_student(target_student, {
+                                "type": "exam_unlocked",
+                                "exam_id": data.get("exam_id"),
+                                "teacher_id": user_id,
+                                "message": "Instructor has granted permission to resume your assessment."
+                            })
+                            await ws_manager.broadcast_to_teachers({
+                                "type": "student_unlocked_confirmed",
+                                "exam_id": data.get("exam_id"),
+                                "student_id": target_student,
+                                "teacher_id": user_id
+                            })
+                            db = SessionLocal()
+                            try:
+                                db.add(AuditLog(
+                                    actor_user_id=user_id,
+                                    action="TEACHER_GRANTED_EXAM_UNLOCK",
+                                    target_resource=target_student,
+                                    details={"by": "teacher", "exam_id": data.get("exam_id")}
+                                ))
+                                db.commit()
+                            finally:
+                                db.close()
+                    elif target_student:
                         await ws_manager.send_to_student(target_student, data)
                         if msg_type in ("screen_share_request", "screen_share_stopped"):
                             db = SessionLocal()
@@ -81,6 +108,9 @@ async def websocket_teacher_endpoint(
                                 db.commit()
                             finally:
                                 db.close()
+                    elif msg_type == "screen_share_request":
+                        # Broadcast request to all students participating in exam
+                        await ws_manager.broadcast_to_students(data)
             except Exception:
                 pass
     except WebSocketDisconnect:
@@ -119,25 +149,48 @@ async def websocket_student_endpoint(
                     "screen_share_stopped",
                     "webrtc_offer",
                     "webrtc_answer",
-                    "ice_candidate"
+                    "ice_candidate",
+                    "tab_switch_alert",
+                    "student_locked",
+                    "request_exam_unlock"
                 ):
-                    # WebRTC Signaling from Student to Teacher
+                    # WebRTC Signaling & Integrity Violations from Student to Teacher
+                    msg_type = data.get("type")
                     target_teacher = data.get("teacher_id") or data.get("target_user_id")
+                    data["student_id"] = user_id
                     if target_teacher:
-                        data["student_id"] = user_id
                         await ws_manager.send_to_teacher(target_teacher, data)
-                        if data.get("type") in ("screen_share_accepted", "screen_share_rejected", "screen_share_stopped"):
-                            db = SessionLocal()
-                            try:
-                                db.add(AuditLog(
-                                    actor_user_id=user_id,
-                                    action=f"SCREEN_SHARE_{data.get('type').replace('screen_share_', '').upper()}",
-                                    target_resource=target_teacher,
-                                    details={"by": "student", "exam_id": data.get("exam_id")}
-                                ))
-                                db.commit()
-                            finally:
-                                db.close()
+                    else:
+                        await ws_manager.broadcast_to_teachers(data)
+
+                    if msg_type in ("screen_share_accepted", "screen_share_rejected", "screen_share_stopped"):
+                        db = SessionLocal()
+                        try:
+                            db.add(AuditLog(
+                                actor_user_id=user_id,
+                                action=f"SCREEN_SHARE_{msg_type.replace('screen_share_', '').upper()}",
+                                target_resource=target_teacher or "all_teachers",
+                                details={"by": "student", "exam_id": data.get("exam_id")}
+                            ))
+                            db.commit()
+                        finally:
+                            db.close()
+                    elif msg_type in ("student_locked", "request_exam_unlock"):
+                        db = SessionLocal()
+                        try:
+                            db.add(AuditLog(
+                                actor_user_id=user_id,
+                                action=msg_type.upper(),
+                                target_resource=data.get("exam_id") or "exam",
+                                details={
+                                    "by": "student",
+                                    "tab_switch_number": data.get("tab_switch_number"),
+                                    "reason": data.get("reason")
+                                }
+                            ))
+                            db.commit()
+                        finally:
+                            db.close()
             except Exception:
                 pass
     except WebSocketDisconnect:

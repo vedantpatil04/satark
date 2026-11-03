@@ -1,0 +1,12 @@
+{
+	"appId": "edu.smartclassroom.app",
+	"appName": "Smart Classroom",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	},
+	"android": {
+		"allowMixedContent": true
+	}
+}

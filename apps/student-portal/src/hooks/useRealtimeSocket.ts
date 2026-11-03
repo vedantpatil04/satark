@@ -13,22 +13,20 @@ const getWsBaseUrl = (): string => {
     }
   }
 
-  // 2. Check build-time env variable
+  // 2. Check build-time env variable (only if explicitly remote)
   const envUrl = import.meta.env.VITE_WS_BASE_URL;
-  if (envUrl && !envUrl.includes("localhost") && !envUrl.includes("127.0.0.1")) {
+  if (envUrl && !envUrl.includes("localhost") && !envUrl.includes("127.0.0.1") && !envUrl.includes("satark.test") && !envUrl.includes("satark.local")) {
     return envUrl;
   }
 
-  // 3. Fallback to browser hostname
+  // 3. Dynamic resolution from browser origin (cross-PC LAN / WSS / satark.test)
   if (typeof window !== "undefined" && window.location) {
     const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const hostname = window.location.hostname;
-    if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1") {
-      return `${wsProto}//${hostname}:8000/ws`;
-    }
+    const hostname = window.location.hostname || "satark.test";
+    return `${wsProto}//${hostname}:8000/ws`;
   }
 
-  return envUrl || "ws://127.0.0.1:8000/ws";
+  return envUrl || "wss://satark.test:8000/ws";
 };
 
 interface RealtimeSocketOptions {

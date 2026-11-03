@@ -93,6 +93,7 @@ class Classroom(Base):
     enrollments = relationship("ClassroomEnrollment", back_populates="classroom", cascade="all, delete-orphan")
     exams = relationship("ExamSession", back_populates="classroom")
     focus_sessions = relationship("FocusSession", back_populates="classroom")
+    notes = relationship("ClassNote", back_populates="classroom", cascade="all, delete-orphan")
 
 
 class ClassroomEnrollment(Base):
@@ -161,6 +162,8 @@ class ExamSession(Base):
     actual_end = Column(DateTime, nullable=True)
     status = Column(String(20), default="draft", nullable=False, index=True)  # 'draft', 'scheduled', 'active', 'paused', 'ended'
     policy_config = Column(JSON, default=dict, nullable=False)  # Configurable rules (window_blur, blacklist, etc.)
+    is_results_published = Column(Boolean, default=False, nullable=False)
+    passing_percentage = Column(Integer, default=40, nullable=False)
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
     classroom = relationship("Classroom", back_populates="exams")
@@ -271,11 +274,14 @@ class ExamQuestion(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     exam_id = Column(String(36), ForeignKey("exam_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    question_type = Column(String(20), default="mcq", nullable=False)  # 'mcq', 'multiple_select', 'true_false', 'short_answer'
     question_text = Column(Text, nullable=False)
-    options = Column(JSON, nullable=False)  # List[str] with 4 choices
-    correct_option_index = Column(Integer, nullable=False)  # 0, 1, 2, or 3
+    options = Column(JSON, nullable=False)  # List[str]
+    correct_option_index = Column(Integer, nullable=True)  # for mcq and true_false
+    correct_answers = Column(JSON, default=list, nullable=True)  # List[int] for multi-select, List[str] for short_answer
     marks = Column(Integer, default=1, nullable=False)
     order_num = Column(Integer, default=1, nullable=False)
+    explanation = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -293,6 +299,7 @@ class ExamSubmission(Base):
     total_marks = Column(Integer, default=0, nullable=False)
     percentage = Column(Integer, default=0, nullable=False)
     status = Column(String(20), default="submitted", nullable=False, index=True)  # 'submitted', 'graded'
+    is_passed = Column(Boolean, nullable=True)
     submitted_at = Column(DateTime, default=utc_now, nullable=False)
     created_at = Column(DateTime, default=utc_now, nullable=False)
 
@@ -314,8 +321,12 @@ class StudentAnswer(Base):
     student_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     question_id = Column(String(36), ForeignKey("exam_questions.id", ondelete="CASCADE"), nullable=False, index=True)
     selected_option_index = Column(Integer, nullable=True)
+    selected_options = Column(JSON, default=list, nullable=True)  # List[int] for multi-select
+    text_answer = Column(Text, nullable=True)  # string for short_answer
     is_correct = Column(Boolean, nullable=True)
     marks_awarded = Column(Integer, default=0, nullable=False)
+    manual_score = Column(Integer, nullable=True)
+    feedback = Column(Text, nullable=True)
     answered_at = Column(DateTime, default=utc_now, nullable=False)
 
     __table_args__ = (
@@ -416,12 +427,61 @@ class MediaSessionParticipant(Base):
     role = Column(String(20), nullable=False)  # 'teacher', 'student'
     is_sharing_screen = Column(Boolean, default=False, nullable=False)
     is_camera_on = Column(Boolean, default=False, nullable=False)
+    is_camera_streaming = Column(Boolean, default=False, nullable=False)
     connection_status = Column(String(20), default="connected", nullable=False)  # 'connected', 'disconnected'
     joined_at = Column(DateTime, default=utc_now, nullable=False)
     left_at = Column(DateTime, nullable=True)
 
     exam = relationship("ExamSession", back_populates="media_participants")
     user = relationship("User", foreign_keys=[user_id])
+
+
+class PracticeFile(Base):
+    __tablename__ = "practice_files"
+
+    id = Column(GUID(), primary_key=True, default=generate_uuid)
+    user_id = Column(GUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    language = Column(String(20), nullable=False, index=True)  # 'c', 'cpp', 'java', 'python'
+    filename = Column(String(100), nullable=False)
+    code = Column(Text, nullable=False, default="")
+    stdin = Column(Text, nullable=True, default="")
+    is_active = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    user = relationship("User", backref="practice_files")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "language", "filename", name="uq_user_lang_filename"),
+    )
+
+
+class ClassNote(Base):
+    __tablename__ = "class_notes"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    classroom_id = Column(String(36), ForeignKey("classrooms.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    subject = Column(String(100), nullable=True)
+    category = Column(String(50), nullable=False, default="Lecture Notes")  # 'Lecture Notes', 'Syllabus', 'Reference', 'Assignment', 'Worksheet', 'Cheatsheet'
+    original_filename = Column(String(255), nullable=False)
+    stored_filename = Column(String(255), nullable=False)
+    relative_path = Column(String(500), nullable=False)  # class_notes/{class_id}/{note_id}/{stored_filename}
+    file_size_bytes = Column(Integer, nullable=False, default=0)
+    mime_type = Column(String(120), nullable=False, default="application/octet-stream")
+    file_extension = Column(String(20), nullable=False)  # '.pdf', '.docx', etc.
+    is_published = Column(Boolean, default=True, nullable=False, index=True)
+    download_count = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    # Relationships
+    classroom = relationship("Classroom", back_populates="notes")
+    teacher = relationship("User", foreign_keys=[teacher_id])
+
+
 
 
 

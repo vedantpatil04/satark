@@ -180,6 +180,8 @@ class ExamResponse(BaseModel):
     actual_end: Optional[datetime] = None
     status: str
     policy_config: Dict[str, Any]
+    is_results_published: bool = False
+    passing_percentage: Optional[int] = 40
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -223,31 +225,43 @@ class ClassroomAnnouncementResponse(BaseModel):
 # ==========================================
 # Exam Question & Submission Schemas
 # ==========================================
+QuestionType = Literal["mcq", "multiple_select", "true_false", "short_answer"]
+
+
 class ExamQuestionCreate(BaseModel):
-    question_text: str = Field(..., min_length=3)
-    options: List[str] = Field(..., min_length=2, max_length=6)
-    correct_option_index: int = Field(..., ge=0, le=5)
+    question_text: str = Field(..., min_length=2)
+    question_type: QuestionType = "mcq"
+    options: List[str] = Field(default_factory=list)
+    correct_option_index: Optional[int] = None
+    correct_answers: Optional[List[Any]] = Field(default_factory=list)
     marks: int = Field(1, ge=1, le=100)
     order_num: Optional[int] = 1
+    explanation: Optional[str] = None
 
 
 class ExamQuestionUpdate(BaseModel):
     question_text: Optional[str] = None
+    question_type: Optional[QuestionType] = None
     options: Optional[List[str]] = None
     correct_option_index: Optional[int] = None
+    correct_answers: Optional[List[Any]] = None
     marks: Optional[int] = None
     order_num: Optional[int] = None
+    explanation: Optional[str] = None
 
 
 class ExamQuestionResponse(BaseModel):
     id: ID
     exam_id: ID
     question_text: str
-    options: List[str]
+    question_type: str = "mcq"
+    options: List[str] = Field(default_factory=list)
     marks: int
     order_num: int
+    explanation: Optional[str] = None
     # Omitted or None for students until exam concludes
     correct_option_index: Optional[int] = None
+    correct_answers: Optional[List[Any]] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -256,6 +270,8 @@ class ExamQuestionResponse(BaseModel):
 class SaveAnswerRequest(BaseModel):
     question_id: str
     selected_option_index: Optional[int] = None
+    selected_options: Optional[List[int]] = None
+    text_answer: Optional[str] = None
 
 
 class StudentAnswerResponse(BaseModel):
@@ -263,6 +279,10 @@ class StudentAnswerResponse(BaseModel):
     exam_id: ID
     question_id: ID
     selected_option_index: Optional[int] = None
+    selected_options: Optional[List[int]] = None
+    text_answer: Optional[str] = None
+    is_correct: Optional[bool] = None
+    marks_awarded: Optional[int] = 0
     answered_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -279,11 +299,56 @@ class ExamSubmissionResponse(BaseModel):
     student_name: Optional[str] = None
     score: Optional[int] = None
     total_marks: Optional[int] = None
-    percentage: Optional[int] = None
+    percentage: Optional[float] = None
     status: str
+    is_passed: Optional[bool] = None
     submitted_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SubmissionQuestionReview(BaseModel):
+    question_id: str
+    question_text: str
+    question_type: str
+    options: List[str]
+    marks: int
+    order_num: int
+    correct_option_index: Optional[int] = None
+    correct_answers: Optional[List[Any]] = None
+    explanation: Optional[str] = None
+    selected_option_index: Optional[int] = None
+    selected_options: Optional[List[int]] = None
+    text_answer: Optional[str] = None
+    is_correct: Optional[bool] = None
+    marks_awarded: int = 0
+    manual_score: Optional[int] = None
+    feedback: Optional[str] = None
+
+
+class SubmissionReviewResponse(BaseModel):
+    submission_id: str
+    exam_id: str
+    student_id: str
+    student_name: str
+    score: int
+    total_marks: int
+    percentage: float
+    status: str
+    is_passed: Optional[bool] = None
+    passing_percentage: Optional[int] = 40
+    is_results_published: bool = False
+    submitted_at: datetime
+    questions: List[SubmissionQuestionReview]
+
+
+class GradeAnswerRequest(BaseModel):
+    manual_score: int
+    feedback: Optional[str] = None
+
+
+class PublishResultsRequest(BaseModel):
+    passing_percentage: Optional[int] = 40
 
 
 # ==========================================
@@ -604,4 +669,124 @@ class MediaRoomOverviewResponse(BaseModel):
     active_streamers: int
     alert_count: int
     students: List[Dict[str, Any]]
+
+
+# ==========================================
+# Compiler & Practice Schemas
+# ==========================================
+class ExecuteCodeRequest(BaseModel):
+    language: Literal["c", "cpp", "java", "python"]
+    code: str
+    stdin: Optional[str] = ""
+    filename: Optional[str] = None
+
+
+class ExecuteCodeResponse(BaseModel):
+    status: Literal[
+        "success",
+        "compilation_error",
+        "runtime_error",
+        "timed_out",
+        "memory_limit_exceeded",
+        "unavailable",
+        "system_error"
+    ]
+    stdout: str = ""
+    stderr: str = ""
+    compilation_error: Optional[str] = None
+    execution_time_ms: int = 0
+    memory_kb: Optional[int] = None
+    exit_code: Optional[int] = None
+    security_enforced: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RuntimeInfo(BaseModel):
+    name: str
+    language: str
+    is_available: bool
+    version: Optional[str] = None
+    binary_path: Optional[str] = None
+    error_message: Optional[str] = None
+    setup_guide: Optional[Dict[str, Any]] = None
+
+
+class CompilerStatusResponse(BaseModel):
+    runtimes: Dict[str, RuntimeInfo]
+    isolation_info: Dict[str, Any]
+
+
+class PracticeFileCreate(BaseModel):
+    language: Literal["c", "cpp", "java", "python"]
+    filename: str = Field(..., min_length=1, max_length=100)
+    code: Optional[str] = ""
+    stdin: Optional[str] = ""
+
+
+class PracticeFileUpdate(BaseModel):
+    filename: Optional[str] = Field(None, min_length=1, max_length=100)
+    code: Optional[str] = None
+    stdin: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class PracticeFileResponse(BaseModel):
+    id: ID
+    user_id: ID
+    language: str
+    filename: str
+    code: str
+    stdin: Optional[str] = ""
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SampleProgram(BaseModel):
+    id: str
+    title: str
+    description: str
+    filename: str
+    language: Literal["c", "cpp", "java", "python"]
+    code: str
+    stdin: Optional[str] = ""
+
+
+# ==========================================
+# Class Notes Schemas
+# ==========================================
+class ClassNoteUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = None
+    subject: Optional[str] = None
+    category: Optional[str] = None
+    is_published: Optional[bool] = None
+
+
+class ClassNoteResponse(BaseModel):
+    id: ID
+    classroom_id: ID
+    classroom_title: Optional[str] = None
+    classroom_subject_code: Optional[str] = None
+    teacher_id: ID
+    teacher_name: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    subject: Optional[str] = None
+    category: str
+    original_filename: str
+    file_size_bytes: int
+    mime_type: str
+    file_extension: str
+    is_published: bool
+    download_count: int
+    created_at: datetime
+    updated_at: datetime
+    download_url: Optional[str] = None
+    preview_url: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 

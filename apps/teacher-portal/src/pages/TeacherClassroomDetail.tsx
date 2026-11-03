@@ -5,6 +5,7 @@ import { classroomsApi, Classroom, EnrolledStudent } from "@/api/classrooms";
 import {
   ArrowLeft,
   Users,
+  BookOpen,
   Copy,
   Check,
   Calendar,
@@ -31,6 +32,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { ClassNotesManager } from "@/components/notes/ClassNotesManager";
 
 export const TeacherClassroomDetail: React.FC = () => {
   const { id, classroomId } = useParams<{ id?: string; classroomId?: string }>();
@@ -39,6 +41,7 @@ export const TeacherClassroomDetail: React.FC = () => {
   const [students, setStudents] = useState<EnrolledStudent[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState<"notes" | "students">("notes");
   const navigate = useNavigate();
 
   // QR Code Modal State
@@ -148,107 +151,144 @@ export const TeacherClassroomDetail: React.FC = () => {
     <div className="space-y-6 max-w-6xl mx-auto">
       {/* Back button & Title */}
       <div className="flex items-center gap-3">
-        <Button variant="outline" size="sm" onClick={() => navigate("/teacher/classrooms")}>
-          <ArrowLeft className="w-4 h-4 mr-1" /> Classrooms
+        <Button variant="outline" size="sm" onClick={() => navigate("/classrooms")} className="rounded-xl border-stone-200 bg-white hover:bg-stone-50 text-xs">
+          <ArrowLeft className="w-4 h-4 mr-1" /> All Classrooms
         </Button>
       </div>
 
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 glass-card">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-3xl bg-white border border-stone-200/80 shadow-xs border-l-4 border-l-[#D97706]">
         <div>
           {classroom.subject_code && (
-            <span className="text-[10px] font-bold uppercase tracking-wider text-primary bg-primary/10 px-2 py-0.5 rounded">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-[#D97706] bg-[#FFF2E5] px-2 py-0.5 rounded-md font-mono">
               {classroom.subject_code}
             </span>
           )}
-          <h1 className="text-2xl font-bold text-foreground mt-1">{classroom.title}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{classroom.description || "Active division"}</p>
+          <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">{classroom.title}</h1>
+          <p className="text-xs text-stone-500 mt-0.5">{classroom.description || "Active division"}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           {/* PIN Card */}
-          <div className="flex items-center gap-3 bg-muted/60 p-3 rounded-xl border border-border/50">
+          <div className="flex items-center gap-3 bg-[#FFF9F2] p-3 rounded-2xl border border-amber-200">
             <div>
-              <span className="text-[10px] uppercase font-bold text-muted-foreground block">Join PIN Code</span>
-              <span className="font-mono text-lg font-bold text-primary tracking-widest">{classroom.join_code}</span>
+              <span className="text-[10px] uppercase font-bold text-stone-500 block">Join PIN Code</span>
+              <span className="font-mono text-lg font-black text-[#D97706] tracking-widest">{classroom.join_code}</span>
             </div>
-            <Button size="sm" variant="outline" onClick={handleCopy} className="gap-1.5 text-xs">
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-              {copied ? "Copied" : "Copy"}
-            </Button>
+            <button
+              onClick={handleCopy}
+              className="p-1.5 rounded-lg hover:bg-amber-100 text-[#D97706] transition-colors"
+              title="Copy PIN"
+            >
+              {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+            </button>
           </div>
 
           {/* QR Code Action */}
-          <Button variant="outline" onClick={handleOpenQR} className="gap-1.5 font-semibold text-xs h-11">
-            <QrCode className="w-4 h-4 text-primary" /> Show QR
+          <Button variant="outline" onClick={handleOpenQR} className="gap-1.5 font-semibold text-xs h-10 rounded-xl border-stone-200 bg-white hover:bg-stone-50">
+            <QrCode className="w-4 h-4 text-[#D97706]" /> QR Code
           </Button>
 
           {/* Broadcast Announcement Action */}
-          <Button onClick={() => setAnnModalOpen(true)} className="gap-1.5 font-semibold text-xs h-11 bg-primary hover:bg-primary/90">
+          <Button onClick={() => setAnnModalOpen(true)} className="gap-1.5 font-bold text-xs h-10 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white shadow-xs">
             <Megaphone className="w-4 h-4" /> Announcement
           </Button>
         </div>
       </div>
 
-      {/* Enrolled Students Table */}
-      <Card className="glass-card">
-        <CardHeader className="flex flex-row items-center justify-between pb-4 border-b border-border/40">
-          <div className="flex items-center gap-2">
-            <Users className="w-5 h-5 text-primary" />
-            <CardTitle className="text-base font-bold text-foreground">
-              Enrolled Candidates ({students.length})
-            </CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-4">
-          {students.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground text-sm flex flex-col items-center gap-2">
-              <UserCheck className="w-8 h-8 opacity-40" />
-              <span>No students enrolled in this cohort yet.</span>
-              <p className="text-xs">
-                Provide the Join PIN <code className="font-bold text-primary">{classroom.join_code}</code> or display the QR code for students to enroll.
-              </p>
+      {/* Classroom Section Tabs */}
+      <div className="flex items-center gap-2 border-b border-stone-200/80 pb-3">
+        <button
+          onClick={() => setActiveTab("notes")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
+            activeTab === "notes"
+              ? "bg-[#D97706] text-white shadow-xs"
+              : "bg-white text-stone-600 border border-stone-200/80 hover:bg-stone-50"
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>Notes & Study Materials</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("students")}
+          className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
+            activeTab === "students"
+              ? "bg-[#D97706] text-white shadow-xs"
+              : "bg-white text-stone-600 border border-stone-200/80 hover:bg-stone-50"
+          }`}
+        >
+          <Users className="w-4 h-4" />
+          <span>Enrolled Candidates ({students.length})</span>
+        </button>
+      </div>
+
+      {activeTab === "notes" ? (
+        <ClassNotesManager
+          classroomId={classroom.id}
+          classroomTitle={classroom.title}
+          subjectCode={classroom.subject_code}
+        />
+      ) : (
+        /* Enrolled Students Table */
+        <Card className="glass-card">
+          <CardHeader className="flex flex-row items-center justify-between pb-4 border-b border-border/40">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-primary" />
+              <CardTitle className="text-base font-bold text-foreground">
+                Enrolled Candidates ({students.length})
+              </CardTitle>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Student Name</TableHead>
-                    <TableHead>Email Address</TableHead>
-                    <TableHead>Student ID</TableHead>
-                    <TableHead>Enrolled Date</TableHead>
-                    <TableHead className="text-right">Action</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {students.map((stu) => (
-                    <TableRow key={stu.student_id}>
-                      <TableCell className="font-semibold text-foreground">{stu.full_name}</TableCell>
-                      <TableCell className="text-muted-foreground flex items-center gap-1.5">
-                        <Mail className="w-3.5 h-3.5 text-muted-foreground/70" /> {stu.email}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{stu.student_id ? `${stu.student_id.substring(0, 12)}...` : "—"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {new Date(stu.enrolled_at).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setStudentToRemove(stu)}
-                          className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive gap-1"
-                        >
-                          <UserMinus className="w-3.5 h-3.5" /> Remove
-                        </Button>
-                      </TableCell>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {students.length === 0 ? (
+              <div className="py-12 text-center text-muted-foreground text-sm flex flex-col items-center gap-2">
+                <UserCheck className="w-8 h-8 opacity-40" />
+                <span>No students enrolled in this cohort yet.</span>
+                <p className="text-xs">
+                  Provide the Join PIN <code className="font-bold text-primary">{classroom.join_code}</code> or display the QR code for students to enroll.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Student Name</TableHead>
+                      <TableHead>Email Address</TableHead>
+                      <TableHead>Student ID</TableHead>
+                      <TableHead>Enrolled Date</TableHead>
+                      <TableHead className="text-right">Action</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {students.map((stu) => (
+                      <TableRow key={stu.student_id}>
+                        <TableCell className="font-semibold text-foreground">{stu.full_name}</TableCell>
+                        <TableCell className="text-muted-foreground flex items-center gap-1.5">
+                          <Mail className="w-3.5 h-3.5 text-muted-foreground/70" /> {stu.email}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground">{stu.student_id ? `${stu.student_id.substring(0, 12)}...` : "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {new Date(stu.enrolled_at).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setStudentToRemove(stu)}
+                            className="h-8 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive gap-1"
+                          >
+                            <UserMinus className="w-3.5 h-3.5" /> Remove
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* QR Code Dialog */}
       <Dialog open={qrModalOpen} onOpenChange={setQrModalOpen}>

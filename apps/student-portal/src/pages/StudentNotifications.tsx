@@ -25,7 +25,7 @@ export const StudentNotifications: React.FC = () => {
   const loadNotifications = async () => {
     try {
       const data = await notificationsApi.list(filterUnreadOnly ? false : undefined);
-      setNotifications(data);
+      setNotifications(Array.isArray(data) ? data : []);
     } catch {
       toast.error("Failed to load notifications");
     } finally {
@@ -65,8 +65,8 @@ export const StudentNotifications: React.FC = () => {
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-medium">Loading notifications...</p>
+        <Loader2 className="w-8 h-8 animate-spin text-[#D97706]" />
+        <p className="text-xs text-stone-500 font-medium">Loading notifications...</p>
       </div>
     );
   }
@@ -76,37 +76,41 @@ export const StudentNotifications: React.FC = () => {
   const getTypeIcon = (type: string) => {
     switch (type) {
       case "exam_announcement":
-        return <Calendar className="w-5 h-5 text-blue-400" />;
+        return <Calendar className="w-4 h-4 text-blue-600" />;
       case "focus_nudge":
-        return <Brain className="w-5 h-5 text-emerald-400" />;
+        return <Brain className="w-4 h-4 text-emerald-600" />;
       case "security":
-        return <ShieldAlert className="w-5 h-5 text-destructive" />;
+        return <ShieldAlert className="w-4 h-4 text-rose-600" />;
       default:
-        return <Bell className="w-5 h-5 text-primary" />;
+        return <Bell className="w-4 h-4 text-[#D97706]" />;
     }
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto py-2">
+    <div className="space-y-6 max-w-4xl mx-auto pb-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground">
+          <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
             Notification Inbox
           </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Exam schedules, course updates, and focus nudges.
+          <p className="text-xs text-stone-500 mt-0.5">
+            Exam schedules, classroom announcements, and focus nudges.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            variant={filterUnreadOnly ? "default" : "outline"}
+            variant="outline"
             onClick={() => setFilterUnreadOnly(!filterUnreadOnly)}
-            className="gap-1.5 text-xs font-semibold"
+            className={`gap-1.5 text-xs font-semibold rounded-xl h-8.5 ${
+              filterUnreadOnly
+                ? "bg-[#D97706] text-white border-[#D97706] hover:bg-[#B45309]"
+                : "border-stone-200 bg-white hover:bg-stone-50 text-slate-700"
+            }`}
           >
             <Filter className="w-3.5 h-3.5" />
-            {filterUnreadOnly ? "Showing Unread" : "Show Unread Only"} ({unreadCount})
+            {filterUnreadOnly ? "Showing Unread" : "Unread Only"} ({unreadCount})
           </Button>
 
           {unreadCount > 0 && (
@@ -114,86 +118,62 @@ export const StudentNotifications: React.FC = () => {
               size="sm"
               variant="outline"
               onClick={handleMarkAllRead}
-              className="gap-1.5 text-xs font-semibold"
+              className="gap-1.5 text-xs font-semibold rounded-xl h-8.5 border-stone-200 bg-white hover:bg-stone-50"
             >
-              <CheckCheck className="w-3.5 h-3.5 text-primary" />
-              Mark All Read
+              <CheckCheck className="w-3.5 h-3.5 text-[#D97706]" /> Mark All Read
             </Button>
           )}
         </div>
       </div>
 
       {notifications.length === 0 ? (
-        <Card className="glass-card text-center py-16">
-          <CardContent className="flex flex-col items-center gap-3">
-            <Bell className="w-12 h-12 text-muted-foreground/30" />
-            <h3 className="text-lg font-bold text-foreground">All Caught Up!</h3>
-            <p className="text-sm text-muted-foreground max-w-sm">
-              You have no new notifications or exam alerts at this moment.
-            </p>
-          </CardContent>
-        </Card>
+        <div className="rounded-3xl bg-white border border-stone-200/80 p-12 text-center text-stone-400">
+          <Bell className="w-10 h-10 mx-auto mb-2 opacity-30 text-stone-400" />
+          <h3 className="text-sm font-bold text-slate-800">Inbox is Clear</h3>
+          <p className="text-xs text-stone-400 mt-1">No notifications matched your active filter.</p>
+        </div>
       ) : (
         <div className="space-y-3">
-          {notifications.map((item) => (
-            <Card
-              key={item.id}
-              className={`glass-card transition-all ${
-                item.is_read
-                  ? "border-border/30 opacity-75"
-                  : "border-primary/40 bg-primary/5 shadow-sm"
+          {notifications.map((n) => (
+            <div
+              key={n.id}
+              className={`rounded-2xl border p-4 transition-all bg-white shadow-xs flex items-start justify-between gap-4 ${
+                n.is_read ? "border-stone-200/60 opacity-75" : "border-amber-300 bg-[#FFFDF9]"
               }`}
             >
-              <CardContent className="p-5 flex items-start justify-between gap-4">
-                <div className="flex items-start gap-4">
-                  <div className="p-2.5 rounded-xl bg-muted/60 shrink-0 mt-0.5">
-                    {getTypeIcon(item.notification_type)}
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="font-bold text-sm text-foreground">{item.title}</h4>
-                      <Badge variant="outline" className="text-[10px] uppercase font-mono">
-                        {item.notification_type.replace("_", " ")}
-                      </Badge>
-                      {!item.is_read && (
-                        <Badge className="text-[10px] bg-primary text-primary-foreground font-semibold">
-                          New
-                        </Badge>
-                      )}
-                    </div>
-
-                    <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
-                      {item.message}
-                    </p>
-
-                    <p className="text-[11px] text-muted-foreground/80 font-mono pt-1">
-                      {new Date(item.created_at).toLocaleString()}
-                    </p>
-                  </div>
+              <div className="flex items-start gap-3.5">
+                <div className="w-9 h-9 rounded-xl bg-[#FFF2E5] flex items-center justify-center shrink-0 mt-0.5">
+                  {getTypeIcon(n.type)}
                 </div>
-
-                {!item.is_read && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleMarkRead(item.id)}
-                    disabled={markingId === item.id}
-                    className="shrink-0 text-xs font-semibold gap-1 text-muted-foreground hover:text-foreground"
-                  >
-                    {markingId === item.id ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Check className="w-3.5 h-3.5 text-primary" />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-xs sm:text-sm text-slate-900">{n.title}</h4>
+                    {!n.is_read && (
+                      <span className="w-2 h-2 rounded-full bg-[#D97706]" />
                     )}
-                    Mark read
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
+                  </div>
+                  <p className="text-xs text-stone-600 mt-0.5 leading-relaxed">{n.message}</p>
+                  <span className="text-[10px] text-stone-400 block mt-1 font-medium">
+                    {new Date(n.created_at).toLocaleString([], { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" })}
+                  </span>
+                </div>
+              </div>
+
+              {!n.is_read && (
+                <button
+                  disabled={markingId === n.id}
+                  onClick={() => handleMarkRead(n.id)}
+                  className="p-1.5 rounded-lg text-stone-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors shrink-0"
+                  title="Mark as Read"
+                >
+                  <Check className="w-4 h-4" />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
     </div>
   );
 };
+export default StudentNotifications;

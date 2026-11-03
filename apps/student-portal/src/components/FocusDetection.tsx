@@ -7,11 +7,14 @@ import {
   Loader2,
   Bell,
   Eye,
+  EyeOff,
   RefreshCw,
   UserCheck,
   UserX,
+  Users,
   Play,
   Activity,
+  ShieldAlert,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -90,9 +93,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
   const faceCascadeRef = useRef<any>(null);
   const eyeCascadeRef = useRef<any>(null);
 
-  // Tracking Counters
-  const distractedTimeRef = useRef<number>(0);
-  const focusedTimeRef = useRef<number>(0);
+  // 5-Second Distraction Tracking Refs
+  const distractedStartTimeRef = useRef<number | null>(null);
+  const eyeHistoryRef = useRef<boolean[]>([]);
 
   // Performance Profiler Ref
   const profilerRef = useRef({
@@ -110,6 +113,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
   // Component UI State (Starts strictly as "idle" - NEVER auto-starts on mount)
   const [faceDetected, setFaceDetected] = useState<boolean>(false);
   const [eyesDetected, setEyesDetected] = useState<boolean>(false);
+  const [multipleFacesDetected, setMultipleFacesDetected] = useState<boolean>(false);
+  const [detectedFaceCount, setDetectedFaceCount] = useState<number>(0);
+  const [distractedSeconds, setDistractedSeconds] = useState<number>(0);
   const [alarmActive, setAlarmActive] = useState<boolean>(false);
   const [perfStats, setPerfStats] = useState<{ frameMs: number; fps: number }>({
     frameMs: 0,
@@ -340,6 +346,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
     if (isMountedRef.current) {
       setFaceDetected(false);
       setEyesDetected(false);
+      setMultipleFacesDetected(false);
+      setDetectedFaceCount(0);
+      setDistractedSeconds(0);
       setAlarmActive(false);
       setPerfStats({ frameMs: 0, fps: 0 });
       setFocusState({
@@ -348,6 +357,8 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         status: "idle",
       });
     }
+    distractedStartTimeRef.current = null;
+    eyeHistoryRef.current = [];
     onStatusChangeRef.current?.("idle");
   }, []);
 
@@ -393,6 +404,8 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
       let faces: any = null;
       let areFacesVisible = false;
       let areEyesVisible = false;
+      let faceCount = 0;
+      let areMultipleFaces = false;
       let isTmFocused = true;
       let postureConfidence = 0.9;
       let sortedPredictions: any[] = [];
@@ -427,13 +440,24 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
           gray = new cv.Mat();
           cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
 
+          // Histogram equalization normalizes lighting and shadows, drastically improving Haar detection
+          cv.equalizeHist(gray, gray);
+
           faces = new cv.RectVector();
           if (faceCascadeRef.current) {
             const faceStart = performance.now();
-            faceCascadeRef.current.detectMultiScale(gray, faces, 1.25, 4);
+            const minFaceSize = new cv.Size(40, 40);
+            faceCascadeRef.current.detectMultiScale(gray, faces, 1.2, 4, 0, minFaceSize);
             faceMs = performance.now() - faceStart;
 
-            if (faces.size() > 0) {
+            faceCount = faces.size();
+
+            if (faceCount >= 2) {
+              // REQUIREMENT 1: Multiple Person Detection (2 or more people in frame)
+              areMultipleFaces = true;
+              areFacesVisible = true;
+              areEyesVisible = false;
+            } else if (faceCount === 1) {
               areFacesVisible = true;
               const face = faces.get(0);
               const roiGray = gray.roi(face);
@@ -441,36 +465,103 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
 
               if (eyeCascadeRef.current) {
                 const eyeStart = performance.now();
-                eyeCascadeRef.current.detectMultiScale(roiGray, eyes, 1.15, 3);
+                // Narrow ROI to upper 16% to 56% of face where eyes naturally reside
+                const eyeRegionY = Math.round(face.height * 0.16);
+                const eyeRegionH = Math.round(face.height * 0.40);
+                const eyeRegion = new cv.Rect(0, eyeRegionY, face.width, eyeRegionH);
+                const eyeRoi = roiGray.roi(eyeRegion);
+
+                const minEye = new cv.Size(Math.round(face.width * 0.09), Math.round(face.height * 0.08));
+                const maxEye = new cv.Size(Math.round(face.width * 0.42), Math.round(face.height * 0.36));
+                eyeCascadeRef.current.detectMultiScale(eyeRoi, eyes, 1.12, 3, 0, minEye, maxEye);
                 eyeMs = performance.now() - eyeStart;
+
                 if (eyes.size() >= 1) {
                   areEyesVisible = true;
                 }
+
+                eyeRoi.delete();
+                eyes.delete();
               }
 
               roiGray.delete();
-              eyes.delete();
             }
           }
         }
 
-        // --- C. Hybrid Attention Decision ---
-        const isCurrentlyFocused = areFacesVisible && (areEyesVisible || isTmFocused);
+        // Eye tracking temporal smoothing to avoid false-positive distraction blips during natural 150ms blinks
+        const eyeHistory = eyeHistoryRef.current;
+        eyeHistory.push(areEyesVisible);
+        if (eyeHistory.length > 3) eyeHistory.shift();
+        const smoothedEyesVisible = eyeHistory.some(Boolean);
 
-        if (!isCurrentlyFocused) {
-          distractedTimeRef.current += 1;
-          focusedTimeRef.current = 0;
+        // REQUIREMENT 2: Improved Focus Accuracy
+        // Student is focused ONLY when:
+        // 1. Exactly 1 person is in front of the camera (not 0 and not >= 2)
+        // 2. Eyes are looking forward towards screen (verified by Haar eye cascade & temporal smoothing)
+        let isCurrentlyFocused = false;
 
-          if (distractedTimeRef.current >= 12 && !isAlarmPlaying()) {
+        if (areMultipleFaces) {
+          // Multiple people detected -> strictly Distracted
+          isCurrentlyFocused = false;
+        } else if (!areFacesVisible || faceCount === 0) {
+          // No face detected -> student left camera / desk -> Distracted
+          isCurrentlyFocused = false;
+        } else if (!smoothedEyesVisible && !areEyesVisible) {
+          // Face detected but eyes looking away / down for >1s -> Distracted
+          isCurrentlyFocused = false;
+        } else {
+          // Exactly 1 person present with eyes tracked looking at screen -> Focused
+          isCurrentlyFocused = true;
+        }
+
+        const now = performance.now();
+
+        // REQUIREMENT 1: Multiple Person Detection Alarm
+        // "If multiple people are detected, the system should immediately trigger a beep notification and mark the status as 'Distracted'."
+        if (areMultipleFaces) {
+          distractedStartTimeRef.current = now;
+          if (isMountedRef.current) {
+            setDistractedSeconds(0);
+          }
+
+          // Immediately trigger alarm beep notification without 5-second delay
+          if (!isAlarmPlaying()) {
+            startContinuousAlarm(1400, 300, 200);
+            if (isMountedRef.current) setAlarmActive(true);
+            onDistractedTooLongRef.current?.();
+          }
+        }
+        // REQUIREMENT 4: Five-Second Distraction Delay for looking away / missing face
+        // "The alarm should only start beeping when the student remains distracted for 5 continuous seconds. It should not trigger immediately when the student briefly looks away."
+        else if (!isCurrentlyFocused) {
+          if (distractedStartTimeRef.current === null) {
+            distractedStartTimeRef.current = now;
+          }
+
+          const elapsedDistractedMs = now - distractedStartTimeRef.current;
+          const elapsedSec = Math.floor(elapsedDistractedMs / 1000);
+          if (isMountedRef.current) {
+            setDistractedSeconds(elapsedSec);
+          }
+
+          // Trigger alarm ONLY after 5 continuous seconds
+          if (elapsedDistractedMs >= 5000 && !isAlarmPlaying()) {
             startContinuousAlarm(1200, 400, 300);
             if (isMountedRef.current) setAlarmActive(true);
             onDistractedTooLongRef.current?.();
           }
-        } else {
-          distractedTimeRef.current = 0;
-          focusedTimeRef.current += 1;
+        }
+        // REQUIREMENT 3: Automatic Alarm Stop
+        // "When the student comes back into the camera frame and is detected again, the alarm should automatically stop."
+        else {
+          distractedStartTimeRef.current = null;
+          if (isMountedRef.current) {
+            setDistractedSeconds(0);
+          }
 
-          if (focusedTimeRef.current >= 2 && isAlarmPlaying()) {
+          // When the student is detected back in frame, automatically stop the alarm immediately
+          if (isAlarmPlaying()) {
             stopContinuousAlarm();
             if (isMountedRef.current) setAlarmActive(false);
           }
@@ -480,6 +571,8 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         if (isMountedRef.current) {
           setFaceDetected((prev) => (prev !== areFacesVisible ? areFacesVisible : prev));
           setEyesDetected((prev) => (prev !== areEyesVisible ? areEyesVisible : prev));
+          setMultipleFacesDetected((prev) => (prev !== areMultipleFaces ? areMultipleFaces : prev));
+          setDetectedFaceCount((prev) => (prev !== faceCount ? faceCount : prev));
 
           setFocusState((prev) => {
             if (
@@ -508,11 +601,11 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         p.lastEyeMs = Math.round(eyeMs);
         p.lastTmMs = Math.round(tmMs);
 
-        const now = performance.now();
-        if (now - p.lastFpsTimestamp >= 1000) {
+        const nowProf = performance.now();
+        if (nowProf - p.lastFpsTimestamp >= 1000) {
           p.fps = p.framesThisSecond;
           p.framesThisSecond = 0;
-          p.lastFpsTimestamp = now;
+          p.lastFpsTimestamp = nowProf;
 
           if (isMountedRef.current) {
             setPerfStats({ frameMs: p.lastFrameMs, fps: p.fps });
@@ -885,20 +978,25 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
           <>
             {/* Live OpenCV Face & Eye Tracking Badge */}
             <div className="absolute top-3 left-3 bg-black/75 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-2 text-xs border border-white/15 shadow-sm z-10">
-              {eyesDetected ? (
+              {multipleFacesDetected ? (
+                <>
+                  <Users className="h-3.5 w-3.5 text-rose-400 animate-pulse" />
+                  <span className="text-rose-300 font-bold">Multiple People Detected ({detectedFaceCount} in frame)</span>
+                </>
+              ) : faceDetected && eyesDetected ? (
                 <>
                   <Eye className="h-3.5 w-3.5 text-emerald-400" />
-                  <span className="text-emerald-300 font-medium">Face & Eyes Detected</span>
+                  <span className="text-emerald-300 font-medium">Face & Eyes Detected (Focused)</span>
                 </>
               ) : faceDetected ? (
                 <>
-                  <UserCheck className="h-3.5 w-3.5 text-amber-400" />
-                  <span className="text-amber-300 font-medium">Face Detected (Eyes Unclear)</span>
+                  <EyeOff className="h-3.5 w-3.5 text-amber-400" />
+                  <span className="text-amber-300 font-medium">Face Detected (Looking Away)</span>
                 </>
               ) : (
                 <>
                   <UserX className="h-3.5 w-3.5 text-rose-400" />
-                  <span className="text-rose-300 font-medium">No Face Detected</span>
+                  <span className="text-rose-300 font-medium">No Person Detected</span>
                 </>
               )}
             </div>
@@ -913,13 +1011,23 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
               </div>
             )}
 
-            {/* Refocus Alarm Pulsing Badge */}
-            {alarmActive && (
+            {/* Refocus Alarm / Grace Countdown Badges */}
+            {multipleFacesDetected ? (
+              <div className="absolute top-3 right-3 bg-rose-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse shadow-lg text-xs font-bold z-10">
+                <ShieldAlert className="h-4 w-4 animate-bounce" />
+                <span>MULTIPLE PEOPLE DETECTED!</span>
+              </div>
+            ) : alarmActive ? (
               <div className="absolute top-3 right-3 bg-rose-600 text-white px-3 py-1.5 rounded-lg flex items-center gap-2 animate-pulse shadow-lg text-xs font-bold z-10">
                 <Bell className="h-4 w-4 animate-bounce" />
-                <span>LOOK AT SCREEN!</span>
+                <span>LOOK AT SCREEN! (Alarm Active)</span>
               </div>
-            )}
+            ) : distractedSeconds > 0 && distractedSeconds < 5 ? (
+              <div className="absolute top-3 right-3 bg-amber-500/90 text-black px-2.5 py-1 rounded-md flex items-center gap-1.5 text-xs font-medium shadow-md z-10">
+                <span className="inline-block w-2 h-2 rounded-full bg-amber-900 animate-ping" />
+                <span>Looking away: {distractedSeconds}s / 5s</span>
+              </div>
+            ) : null}
           </>
         )}
       </div>
@@ -959,11 +1067,19 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
         <div className="p-3.5 rounded-xl border border-border/50 bg-background/60 backdrop-blur-sm space-y-3">
           {alarmActive && (
             <div className="bg-rose-500/15 border border-rose-500/40 rounded-lg p-3 flex items-start gap-3">
-              <Bell className="h-5 w-5 text-rose-400 mt-0.5 animate-bounce flex-shrink-0" />
+              {multipleFacesDetected ? (
+                <ShieldAlert className="h-5 w-5 text-rose-400 mt-0.5 animate-bounce flex-shrink-0" />
+              ) : (
+                <Bell className="h-5 w-5 text-rose-400 mt-0.5 animate-bounce flex-shrink-0" />
+              )}
               <div className="text-xs">
-                <p className="text-rose-400 font-bold">Distraction Alert Active</p>
+                <p className="text-rose-400 font-bold">
+                  {multipleFacesDetected ? "Multiple Person Violation" : "Distraction Alert Active (5s+ elapsed)"}
+                </p>
                 <p className="text-muted-foreground mt-0.5">
-                  Look directly at the screen for 2 seconds to dismiss the alarm.
+                  {multipleFacesDetected
+                    ? "Two or more people detected in frame. Only 1 person permitted during Focus Mode."
+                    : "Return your face and eyes to the screen to automatically silence the alarm."}
                 </p>
               </div>
             </div>
@@ -971,7 +1087,19 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {focusState.isFocused ? (
+              {multipleFacesDetected ? (
+                <>
+                  <div className="p-2 rounded-lg bg-rose-500/15 text-rose-400">
+                    <Users className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <span className="font-semibold text-sm text-rose-400">Distracted (Multiple People)</span>
+                    <p className="text-[11px] text-muted-foreground">
+                      {detectedFaceCount} people in frame — alarm active
+                    </p>
+                  </div>
+                </>
+              ) : focusState.isFocused ? (
                 <>
                   <div className="p-2 rounded-lg bg-emerald-500/15 text-emerald-400">
                     <CheckCircle2 className="h-5 w-5" />
@@ -979,7 +1107,7 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
                   <div>
                     <span className="font-semibold text-sm text-emerald-400">Deep Focus Verified</span>
                     <p className="text-[11px] text-muted-foreground">
-                      {alarmActive ? `Holding focus... ${focusedTimeRef.current}s` : "Optimal posture & screen gaze"}
+                      Face & eyes looking directly at screen
                     </p>
                   </div>
                 </>
@@ -991,7 +1119,9 @@ const FocusDetection: React.FC<FocusDetectionProps> = ({
                   <div>
                     <span className="font-semibold text-sm text-amber-400">Distraction Detected</span>
                     <p className="text-[11px] text-muted-foreground">
-                      {distractedTimeRef.current}s away from study focus
+                      {distractedSeconds < 5
+                        ? `Looking away: ${distractedSeconds}s / 5s (alarm triggers at 5s)`
+                        : `${distractedSeconds}s away — look at screen to stop alarm`}
                     </p>
                   </div>
                 </>

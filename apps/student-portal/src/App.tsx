@@ -15,6 +15,8 @@ import FocusMode from "./pages/FocusMode";
 import TimeSelection from "./pages/TimeSelection";
 import { StudentHistory } from "./pages/StudentHistory";
 import { StudentNotifications } from "./pages/StudentNotifications";
+import { StudentCompiler } from "./pages/StudentCompiler";
+import { StudentNotes } from "./pages/StudentNotes";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +48,12 @@ const App: React.FC = () => (
                 <Route path="/student/dashboard" element={<Navigate to="/dashboard" replace />} />
 
                 <Route path="/dashboard" element={<StudentDashboard />} />
+                <Route path="/compiler" element={<StudentCompiler />} />
+                <Route path="/student/compiler" element={<Navigate to="/compiler" replace />} />
+                <Route path="/notes" element={<StudentNotes />} />
+                <Route path="/notes/:classroomId" element={<StudentNotes />} />
+                <Route path="/student/notes" element={<Navigate to="/notes" replace />} />
+                <Route path="/student/notes/:classroomId" element={<StudentNotes />} />
                 <Route path="/classrooms" element={<StudentClassrooms />} />
                 <Route path="/student/classrooms" element={<Navigate to="/classrooms" replace />} />
 

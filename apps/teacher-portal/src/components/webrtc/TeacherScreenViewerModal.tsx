@@ -26,6 +26,9 @@ export const TeacherScreenViewerModal: React.FC<TeacherScreenViewerModalProps> =
   useEffect(() => {
     if (videoRef.current && remoteStream) {
       videoRef.current.srcObject = remoteStream;
+      videoRef.current.play().catch((err) => {
+        console.warn("Auto-play blocked or waiting for track interaction:", err);
+      });
     }
   }, [remoteStream, isOpen]);
 
@@ -76,6 +79,7 @@ export const TeacherScreenViewerModal: React.FC<TeacherScreenViewerModalProps> =
             ref={videoRef}
             autoPlay
             playsInline
+            muted
             className="w-full h-full object-contain"
           />
           {!remoteStream && (

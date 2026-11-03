@@ -3,22 +3,42 @@
 **Team**: WEBFARM  
 **Team Members**:
 1. Vedant Patil
-2. Amol Khumbar
+2. Amol Kumbhar
 3. Om Mohite
 4. Maruti Shinde
 
 **Architecture**: 100% Local LAN, Completely Offline, Zero Docker, Zero Cloud (No Supabase, No Cloudinary, No LiveKit, No Vercel, No Render)
 
-A unified, ethical smart classroom platform featuring dual policy-driven operational modes: **Exam Mode** (proctored academic assessments with verifiable desktop agent telemetry, browser tab-switch detection, native WebRTC screen monitoring, and server-side auto-grading) and **Focus Mode** (distraction-free study blocks with Pomodoro intervals, edge vision nudges using OpenCV Haar cascades and Teachable Machine models, and 7-day persisted productivity analytics).
+A unified, ethical smart classroom platform featuring dual policy-driven operational modes: **Exam Mode** (proctored academic assessments with verifiable desktop agent telemetry, browser tab-switch detection, native WebRTC screen monitoring, and server-side auto-grading with PDF report cards) and **Focus Mode** (distraction-free study blocks with Pomodoro intervals, edge vision nudges using OpenCV Haar cascades and Teachable Machine models, and 7-day persisted productivity analytics), alongside an integrated **Online Compiler** and **Class Notes Hub**.
 
 ---
 
-## 1. Operating Modes Overview
+## 1. Quick Access Links (Current Active Wi-Fi Network)
+
+> **Active Host IP:** `10.146.60.105`  
+> All services run with trusted **HTTPS** and **WSS** enabled on `0.0.0.0` bindings.
+
+| Portal / Service | LAN Direct Link (Any device on Wi-Fi) | Localhost Link (Host PC) |
+| :--- | :--- | :--- |
+| **Teacher Portal** | [https://10.146.60.105:5174](https://10.146.60.105:5174) | [https://localhost:5174](https://localhost:5174) |
+| **Student Portal** | [https://10.146.60.105:5173](https://10.146.60.105:5173) | [https://localhost:5173](https://localhost:5173) |
+| **Backend API Docs (Swagger)** | [https://10.146.60.105:8000/docs](https://10.146.60.105:8000/docs) | [https://localhost:8000/docs](https://localhost:8000/docs) |
+| **Backend Health Check** | [https://10.146.60.105:8000/health](https://10.146.60.105:8000/health) | [https://localhost:8000/health](https://localhost:8000/health) |
+| **WebSocket Engine** | `wss://10.146.60.105:8000/ws` | `wss://localhost:8000/ws` |
+| **Android APK Download** | [https://10.146.60.105:8000/download-apk](https://10.146.60.105:8000/download-apk) | [https://localhost:8000/download-apk](https://localhost:8000/download-apk) |
+
+*(Domain aliases `https://satark.test:5174` and `https://satark.local:5174` are also fully supported when mapped via `setup-client.bat` or hosts).*
+
+---
+
+## 2. Core Functional Modules
 
 ### A. Exam Mode (Integrity & Proctoring)
 - **Teacher Session Control**: Create exams, define security policies, start/pause/resume/conclude exam sessions.
-- **Teacher-Centred Native WebRTC Screen Monitoring**: Up to 5 concurrent student screen shares streamed peer-to-peer using FastAPI WebSockets for signaling (zero Docker, zero LiveKit).
-- **Explicit Student Consent**: Students must explicitly approve screen sharing in-browser, a visible red status badge indicates active streaming, and students retain an immediate "Stop Sharing" button.
+- **Teacher-Centred Native WebRTC Screen Monitoring**: Concurrent student screen shares streamed peer-to-peer using FastAPI WebSockets for signaling (zero Docker, zero LiveKit).
+- **Explicit Student Consent**: Students must explicitly approve screen sharing in-browser; a visible red status badge indicates active streaming, and students retain an immediate "Stop Sharing" button.
+- **Tab-Switch & Fullscreen Enforcement**: Real-time detection and count of tab changes or window focus loss. Automatically submits or locks out student after policy-configured violations threshold.
+- **Server-Side Auto-Grading & PDF Report Cards**: Instant automated scoring of objective submissions, complete with downloadable high-fidelity PDF exam report cards (`reportlab`).
 - **Device Attestation**: Candidate workstations run a transparent, visible desktop agent connecting via authenticated WebSocket channels.
 - **Live Device Grid**: Proctors track connected, disconnected, and inactive student devices in real-time.
 - **Explainable Anomaly Alerts**: Policy-driven detection of unauthorized window switches, restricted process execution, or multi-display connections with verifiable timeline evidence.
@@ -32,110 +52,122 @@ A unified, ethical smart classroom platform featuring dual policy-driven operati
 - **Teacher Cohort Visibility**: Teachers can observe active study sessions across classroom divisions.
 - **Productivity Analytics**: Historical focus duration, streaks, and distraction patterns persisted across sessions.
 
+### C. Multi-Language Online Code Compiler
+- **Integrated Code Editor**: Syntax-highlighted code editor with real-time compilation and execution directly in the Student Portal.
+- **Polyglot Execution**: Server-side sandboxed execution for **Python 3**, **JavaScript/Node.js**, **C**, **C++**, and **Java**.
+- **Execution Safety & Limits**: Hard resource timeouts, memory bounds, and subprocess monitoring via `psutil`. Supports custom standard input (stdin) passing and structured error output (stdout/stderr).
+
+### D. Digital Class Notes Hub
+- **Teacher Material Uploads**: Upload and categorize PDF lecture slides, code repositories, reference sheets, and homework notes by classroom.
+- **Student Access & In-Browser Preview**: Students enrolled in classrooms can search, filter, preview, and download study notes directly from their dashboard.
+
 ---
 
-## 2. Local LAN Technology Architecture
+## 3. Local LAN Technology Architecture
 
-- **Frontend Architecture**: Decoupled monorepo with **Teacher Portal** (`apps/teacher-portal` on port `5174`), **Student Portal** (`apps/student-portal` on port `5173`), and shared packages (`packages/shared-types`, `shared-api`, `shared-auth`, `shared-ui`, `shared-config`).
+- **Frontend Monorepo**: Decoupled architecture with **Teacher Portal** (`apps/teacher-portal` on port `5174`), **Student Portal** (`apps/student-portal` on port `5173`), and shared packages (`packages/shared-types`, `shared-api`, `shared-auth`, `shared-ui`).
 - **Backend Application Server**: Single authoritative FastAPI server (Python 3.13) bound to `0.0.0.0:8000`.
-- **Central Local Database**: SQLite 3 located at `data/satark.db` running in WAL mode (`PRAGMA journal_mode=WAL;`), enforcing foreign keys (`PRAGMA foreign_keys=ON;`), with 5000ms busy timeout. A schema compatibility view (`CREATE VIEW IF NOT EXISTS profiles AS SELECT * FROM users;`) guarantees full backward compatibility.
-- **Local Identity & Authentication**: Local password hashing via `passlib[bcrypt]` and HS256 JWT tokens. No Supabase Auth, no remote JWKS dependencies.
+- **Central Local Database**: SQLite 3 located at `data/satark.db` running in WAL mode (`PRAGMA journal_mode=WAL;`), enforcing foreign keys (`PRAGMA foreign_keys=ON;`), with a 5000ms busy timeout. A schema compatibility view (`CREATE VIEW IF NOT EXISTS profiles AS SELECT * FROM users;`) guarantees full backward compatibility.
+- **Trusted HTTPS PKI Engine**: Automated Local Root CA and TLS server certificate generation (`scripts/generate_certs.py`) with dynamic SAN discovery covering local IP addresses (`10.146.60.105`), `satark.local`, `satark.test`, and `localhost`. Enables cross-device browser permissions for WebRTC screen sharing without security blocks.
+- **Local Identity & Authentication**: Local password hashing via `passlib[bcrypt]` and HS256 JWT tokens. No external auth provider dependencies.
 - **Signaling & Real-Time Hub**: Native WebSockets (`/ws/events`, `/ws/agent`, `/ws/webrtc`) and Teacher-Centred Native WebRTC peer-to-peer star topology.
 - **Desktop Agent**: Python 3.13, platform adapters for Windows (`user32` + `psutil`) and Linux (X11 / Wayland), 10-second heartbeat telemetry, local SQLite event queue buffering.
 - **Mobile Container**: Single Android application built with Capacitor reusing the student portal frontend (`apps/student-portal/dist`).
-- **Dynamic LAN Server Configuration**: In-app modal with manual host IP entry, latency health check against `/api/v1/health`, localStorage persistence, and QR code for mobile pairing.
 - **Ethical & Privacy Manifesto**: Strict visible monitoring with explicit consent. **No keystroke loggers, no hidden surveillance, no password harvesting, no unauthorized recording**.
 
 ---
 
-## 3. One-Command LAN Management (Windows Host)
+## 4. One-Click Startup & Network Launchers
 
-The platform provides dedicated Windows PowerShell scripts in `scripts/`:
-
+### Quick Launch on Windows (Host PC):
+Double-click `run.bat` or run:
+```bat
+run.bat
+```
+*(Or use PowerShell launcher with automatic IP discovery:)*
 ```powershell
-# 1. Start all SATARK services (Backend, Teacher Portal, Student Portal)
-powershell -ExecutionPolicy Bypass -File .\scripts\start-satark.ps1
-
-# 2. Check system status, running processes, ports, and SQLite database
-powershell -ExecutionPolicy Bypass -File .\scripts\status-satark.ps1
-
-# 3. Diagnose LAN network interface, port reachability, and firewall
-powershell -ExecutionPolicy Bypass -File .\scripts\check-lan.ps1
-
-# 4. Cleanly stop all SATARK background services
-powershell -ExecutionPolicy Bypass -File .\scripts\stop-satark.ps1
-
-# 5. Configure Windows Firewall for Private LAN profiles (Admin)
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-firewall.ps1
+powershell -ExecutionPolicy Bypass -File .\start_satark_lan.ps1
 ```
 
-### Access URLs (Host LAN IP: e.g. `10.106.76.105`):
-- **Teacher Portal**: `http://10.106.76.105:5174` (or `http://localhost:5174`)
-- **Student Portal**: `http://10.106.76.105:5173` (or `http://localhost:5173`)
-- **Backend API**: `http://10.106.76.105:8000` (or `http://localhost:8000`)
-- **Interactive Swagger Docs**: `http://10.106.76.105:8000/docs`
+### Additional Administrative Scripts:
+```powershell
+# 1. Setup host PKI certificates and local domain resolution (Admin)
+setup-host.bat
+
+# 2. Setup client student PC on the same Wi-Fi (Admin on client)
+setup-client.bat 10.146.60.105
+
+# 3. macOS / Linux client setup
+./setup-mac.sh 10.146.60.105
+
+# 4. Check system status, running processes, ports, and SQLite database
+powershell -ExecutionPolicy Bypass -File .\scripts\status-satark.ps1
+
+# 5. Cleanly stop all SATARK background services
+powershell -ExecutionPolicy Bypass -File .\scripts\stop-satark.ps1
+```
 
 ---
 
-## 4. Local Teacher Provisioning & Account Management
+## 5. Evaluation & Demo Accounts
+
+| Role | Email | Password | Full Name | Associated Data |
+| :--- | :--- | :--- | :--- | :--- |
+| **Teacher (Default)** | `teacher@smartclassroom.edu` | `Password123!` | Prof. Robert Langdon | Classrooms: CS-401 & AI-302, Active Exam: CS401M |
+| **Student 1 (Default)**| `alice@smartclassroom.edu` | `Password123!` | Alice Johnson | Enrolled in CS-401, Paired to Windows workstation |
+| **Student 2** | `bob@smartclassroom.edu` | `Password123!` | Bob Smith | Enrolled in CS-401, Paired to Ubuntu workstation |
+| **Student 3** | `charlie@smartclassroom.edu` | `Password123!` | Charlie Davis | Enrolled in CS-401 |
+| **Student 4** | `vedantpatil513@gmail.com` | `Password123!` | Vedant Patil | Active candidate account |
+
+- **Classroom Join PIN**: `CS401X`
+- **Active Exam PIN**: `CS401M`
+- **Teacher Provisioning Key**: `TEACHER-SECURE-KEY-2026`
+
+---
+
+## 6. Local Administrative CLI
 
 SATARK provides an offline administrative CLI (`backend.app.cli`):
 
 ```powershell
 # Provision a new Teacher Administrator account securely:
-python -m backend.app.cli create-teacher --email "prof.satark@local.lan" --name "Prof. Robert Langdon" --password "TeacherSecure123!"
+backend/venv/Scripts/python -m backend.app.cli create-teacher --email "prof.satark@local.lan" --name "Prof. Robert Langdon" --password "TeacherSecure123!"
 
 # Reset password for any account:
-python -m backend.app.cli reset-password --email "student@smartclassroom.edu" --password "NewPassword123!"
+backend/venv/Scripts/python -m backend.app.cli reset-password --email "student@smartclassroom.edu" --password "NewPassword123!"
 
 # Backup the central SQLite database:
-python -m backend.app.cli backup-db
+backend/venv/Scripts/python -m backend.app.cli backup-db
 
 # Check database WAL status and table count:
-python -m backend.app.cli db-status
+backend/venv/Scripts/python -m backend.app.cli db-status
 ```
-
-### Default Evaluation Accounts in Database:
-| Role | Email | Password | Full Name | Associated Data |
-| :--- | :--- | :--- | :--- | :--- |
-| **Teacher (Admin)** | `prof.satark@local.lan` | `TeacherSecure123!` | Prof. Robert Langdon | Local Admin CLI provisioned |
-| **Teacher** | `teacher@smartclassroom.edu` | `Password123!` | Prof. Robert Langdon | Classrooms: CS-401 & AI-302, Active Exam: CS401M |
-| **Student 1** | `alice@smartclassroom.edu` | `Password123!` | Alice Johnson | Enrolled in CS-401, Paired to Windows workstation |
-| **Student 2** | `bob@smartclassroom.edu` | `Password123!` | Bob Smith | Enrolled in CS-401, Paired to Ubuntu workstation |
-
-- **Classroom Join PIN**: `CS401X`
-- **Active Exam PIN**: `CS401M`
-- **Teacher Account Provisioning Key**: `TEACHER-SECURE-KEY-2026`
 
 ---
 
-## 5. Desktop Monitoring Agent Setup & Workstation Pairing
+## 7. Desktop Monitoring Agent Setup
 
-The desktop agent connects student workstations to the exam integrity pipeline without storing student passwords or permanent tokens.
-
-### How to Pair and Run:
-1. Student logs in to the Student Portal (`http://<HOST_IP>:5173/student/dashboard`).
+1. Student logs in to the Student Portal (`https://10.146.60.105:5173`).
 2. Click **"Pair Desktop Agent"** in the top banner.
 3. Note the single-use 6-character pairing code (e.g., `8K2NP4`).
 4. In student terminal:
    ```bash
-   python -m desktop-agent.src.main --host <HOST_IP> --port 8000 --pairing-code 8K2NP4
+   python -m desktop-agent.src.main --host 10.146.60.105 --port 8000 --pairing-code 8K2NP4
    ```
-5. The agent establishes an authenticated WebSocket session (`/ws/agent`), begins heartbeats, and starts monitoring active processes.
-6. The workstation immediately shows **Connected** in the Teacher's Device Grid (`/teacher/devices`).
+5. The workstation immediately connects, streams heartbeats, and shows as **Connected** in the Teacher's Device Grid (`/teacher/devices`).
 
 ---
 
-## 6. Verification & Automated Test Suites
+## 8. Automated Test Suites & Verification
 
 ```powershell
-# Run backend tests (storage, WAL mode, security, question banks, media)
+# Run backend test suite (database, compiler, notes, PDF generation, exam lockouts, WebRTC)
 backend/venv/Scripts/python -m pytest backend/tests/ -v
 
 # Run desktop agent tests
 backend/venv/Scripts/python -m pytest desktop-agent/tests/ -v
 
-# Run frontend builds
+# Frontend production builds
 npm run build:teacher
 npm run build:student
 npm run build
@@ -143,9 +175,8 @@ npm run build
 
 ---
 
-## 7. Android Mobile Client (Capacitor)
+## 9. Android Mobile Client (Capacitor)
 
-The mobile client is packaged as a standalone Android APK:
-- **Debug APK Location**: `android/app/build/outputs/apk/debug/app-debug.apk` (~16.6 MB).
-- **Cleartext Traffic**: Enabled in `AndroidManifest.xml` (`android:usesCleartextTraffic="true"`) for offline Wi-Fi evaluation.
-- **LAN Connection**: Tap **"Configure LAN Server Connection"** on the login screen to enter the host IP or scan the QR code displayed on the teacher portal.
+- **Debug APK Location**: `android/app/build/outputs/apk/debug/app-debug.apk`
+- **Web Download URL**: `https://10.146.60.105:8000/download-apk`
+- **LAN Connection**: Tap **"Configure LAN Server Connection"** on the mobile login screen to enter `https://10.146.60.105:8000` or scan the QR code from the Teacher Portal.

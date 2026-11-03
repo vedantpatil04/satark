@@ -14,6 +14,8 @@ export interface ExamSession {
   actual_end?: string;
   status: "draft" | "scheduled" | "active" | "paused" | "ended";
   policy_config: Record<string, any>;
+  is_results_published?: boolean;
+  passing_percentage?: number;
   created_at: string;
 }
 
@@ -85,10 +87,13 @@ export const examsApi = {
     examId: string,
     payload: {
       question_text: string;
-      options: string[];
-      correct_option_index: number;
+      question_type?: string;
+      options?: string[];
+      correct_option_index?: number | null;
+      correct_answers?: any[];
       marks?: number;
       order_num?: number;
+      explanation?: string;
     }
   ) =>
     apiClient<ExamQuestion>(`/exams/${examId}/questions`, {
@@ -101,10 +106,13 @@ export const examsApi = {
     questionId: string,
     payload: {
       question_text?: string;
+      question_type?: string;
       options?: string[];
-      correct_option_index?: number;
+      correct_option_index?: number | null;
+      correct_answers?: any[];
       marks?: number;
       order_num?: number;
+      explanation?: string;
     }
   ) =>
     apiClient<ExamQuestion>(`/exams/${examId}/questions/${questionId}`, {
@@ -117,12 +125,26 @@ export const examsApi = {
       method: "DELETE",
     }),
 
+  getQuestionsTemplate: () =>
+    apiClient<any>("/exams/questions/template"),
+
+  importQuestionsJson: (examId: string, payload: any, preview: boolean = false) =>
+    apiClient<any>(`/exams/${examId}/questions/import-json?preview=${preview}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  exportQuestionsJson: (examId: string) =>
+    apiClient<any>(`/exams/${examId}/questions/export-json`),
+
   // Student Answers & Submission APIs
   saveAnswer: (
     examId: string,
     payload: {
       question_id: string;
       selected_option_index?: number | null;
+      selected_options?: number[];
+      text_answer?: string | null;
     }
   ) =>
     apiClient<StudentAnswer>(`/exams/${examId}/answers`, {
@@ -139,6 +161,8 @@ export const examsApi = {
       answers?: {
         question_id: string;
         selected_option_index?: number | null;
+        selected_options?: number[];
+        text_answer?: string | null;
       }[];
     } = {}
   ) =>
@@ -149,6 +173,55 @@ export const examsApi = {
 
   getSubmissions: (examId: string) =>
     apiClient<ExamSubmission[]>(`/exams/${examId}/submissions`),
+
+  getSubmissionReview: (examId: string, submissionId: string) =>
+    apiClient<any>(`/exams/${examId}/submissions/${submissionId}/review`),
+
+  publishResults: (examId: string, passingPercentage?: number) =>
+    apiClient<{ status: string; is_results_published: boolean; passing_percentage: number }>(
+      `/exams/${examId}/publish-results`,
+      {
+        method: "POST",
+        body: JSON.stringify({ passing_percentage: passingPercentage }),
+      }
+    ),
+
+  gradeAnswer: (
+    examId: string,
+    submissionId: string,
+    questionId: string,
+    manualScore: number,
+    feedback?: string
+  ) =>
+    apiClient<any>(
+      `/exams/${examId}/submissions/${submissionId}/answers/${questionId}/grade`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ manual_score: manualScore, feedback }),
+      }
+    ),
+
+  downloadPdf: async (examId: string, submissionId: string, filename?: string) => {
+    const token = typeof window !== "undefined"
+      ? (localStorage.getItem("auth_token") || localStorage.getItem("satark_token") || localStorage.getItem("token"))
+      : null;
+    const res = await fetch(`/api/v1/exams/${examId}/submissions/${submissionId}/pdf`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: "Failed to download PDF" }));
+      throw new Error(err.detail || "Failed to download PDF");
+    }
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || `SATARK_Result_${examId.slice(0, 8)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  },
 
   // Tab-Switch Browser Visibility Event
   sendTabSwitch: (
@@ -165,6 +238,30 @@ export const examsApi = {
       {
         method: "POST",
         body: JSON.stringify(payload),
+      }
+    ),
+
+  // Student Re-Admission / Unlock APIs (Feature: 3 Tab Switch Lockout & Teacher Approval)
+  requestUnlock: (
+    examId: string,
+    payload?: {
+      reason?: string;
+      tab_switch_number?: number;
+    }
+  ) =>
+    apiClient<{ status: string; message: string }>(
+      `/exams/${examId}/request-unlock`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload || {}),
+      }
+    ),
+
+  unlockStudent: (examId: string, studentId: string) =>
+    apiClient<{ status: string; message: string }>(
+      `/exams/${examId}/students/${studentId}/unlock`,
+      {
+        method: "POST",
       }
     ),
 

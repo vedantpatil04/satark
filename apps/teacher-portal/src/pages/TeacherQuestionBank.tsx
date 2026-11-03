@@ -401,17 +401,17 @@ export const TeacherQuestionBank: React.FC = () => {
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="space-y-6 max-w-7xl mx-auto pb-8">
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <div className="p-2 bg-primary/10 text-primary rounded-xl">
-              <Database className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl bg-[#FFF2E5] text-[#D97706] flex items-center justify-center font-bold">
+              <Database className="w-5 h-5 text-[#D97706]" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-foreground">Question Banks & Datasets</h1>
-              <p className="text-sm text-muted-foreground">
+              <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">Question Banks & Datasets</h1>
+              <p className="text-xs text-stone-500 mt-0.5">
                 Author, curate, and upload standardized JSON datasets to deploy verified examination questions.
               </p>
             </div>
@@ -419,14 +419,14 @@ export const TeacherQuestionBank: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleDownloadTemplate} className="gap-2">
-            <Download className="w-4 h-4 text-primary" /> Download JSON Template
+          <Button variant="outline" size="sm" onClick={handleDownloadTemplate} className="gap-2 rounded-xl text-xs border-stone-200 bg-white hover:bg-stone-50">
+            <Download className="w-4 h-4 text-[#D97706]" /> Download Template
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowImportModal(true)} className="gap-2">
-            <Upload className="w-4 h-4 text-emerald-500" /> Upload JSON Dataset
+          <Button variant="outline" size="sm" onClick={() => setShowImportModal(true)} className="gap-2 rounded-xl text-xs border-stone-200 bg-white hover:bg-stone-50">
+            <Upload className="w-4 h-4 text-emerald-600" /> Upload JSON Dataset
           </Button>
-          <Button size="sm" onClick={() => setShowCreateBankModal(true)} className="gap-2">
-            <Plus className="w-4 h-4" /> New Question Bank
+          <Button size="sm" onClick={() => setShowCreateBankModal(true)} className="gap-2 rounded-xl text-xs bg-[#D97706] hover:bg-[#B45309] text-white font-bold shadow-xs">
+            <Plus className="w-4 h-4" /> New Bank
           </Button>
         </div>
       </div>
@@ -435,28 +435,28 @@ export const TeacherQuestionBank: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Bank Cards */}
         <div className="lg:col-span-4 space-y-4">
-          <Card className="border-border">
+          <Card className="border-stone-200/80 rounded-2xl bg-white shadow-xs">
             <CardHeader className="p-4 pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-semibold uppercase text-muted-foreground tracking-wider">
+                <CardTitle className="text-xs font-bold uppercase text-stone-400 tracking-wider">
                   Question Banks ({banks.length})
                 </CardTitle>
               </div>
-              <div className="mt-3 relative">
-                <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
+              <div className="mt-2 relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-stone-400" />
                 <Input
                   placeholder="Search title, subject, topic..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 h-9 text-xs"
+                  className="pl-8 h-8.5 text-xs rounded-xl bg-stone-50 border-stone-200"
                 />
               </div>
             </CardHeader>
             <CardContent className="p-2 space-y-1.5 max-h-[600px] overflow-y-auto">
               {banks.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground text-xs">
+                <div className="text-center py-8 text-stone-400 text-xs">
                   <BookOpen className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                  No question banks found. Click "New Question Bank" or "Upload JSON Dataset".
+                  No question banks found. Click "New Bank" or "Upload JSON Dataset".
                 </div>
               ) : (
                 banks.map((b) => {
@@ -465,24 +465,24 @@ export const TeacherQuestionBank: React.FC = () => {
                     <div
                       key={b.id}
                       onClick={() => setSelectedBankId(b.id)}
-                      className={`p-3 rounded-lg border text-left cursor-pointer transition-all ${
+                      className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
                         isSelected
-                          ? "bg-primary/10 border-primary text-foreground shadow-sm"
-                          : "border-border hover:bg-muted/50 text-foreground"
+                          ? "bg-[#FFF9F2] border-[#D97706] text-slate-900 shadow-xs"
+                          : "border-stone-200/70 hover:bg-stone-50 text-slate-800"
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="font-semibold text-sm truncate">{b.title}</div>
-                        <Badge variant="outline" className="text-[10px] shrink-0 font-medium">
+                        <div className="font-bold text-xs truncate">{b.title}</div>
+                        <Badge variant="outline" className="text-[10px] shrink-0 font-medium bg-white text-stone-600">
                           {b.item_count || 0} Qs
                         </Badge>
                       </div>
-                      <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
-                        <span className="font-medium text-primary">{b.subject}</span>
+                      <div className="flex items-center gap-2 mt-1 text-xs text-stone-500">
+                        <span className="font-semibold text-[#D97706]">{b.subject}</span>
                         {b.topic && <span>• {b.topic}</span>}
                       </div>
                       {b.description && (
-                        <p className="text-[11px] text-muted-foreground line-clamp-1 mt-1">{b.description}</p>
+                        <p className="text-[11px] text-stone-400 line-clamp-1 mt-1">{b.description}</p>
                       )}
                     </div>
                   );
@@ -495,23 +495,23 @@ export const TeacherQuestionBank: React.FC = () => {
         {/* Right Column: Active Bank Questions Detail */}
         <div className="lg:col-span-8 space-y-4">
           {selectedBank ? (
-            <Card className="border-border">
-              <CardHeader className="p-5 border-b border-border bg-card/60">
+            <Card className="border-stone-200/80 rounded-2xl bg-white shadow-xs">
+              <CardHeader className="p-5 border-b border-stone-100 bg-[#FCFBF8]">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <CardTitle className="text-lg font-bold">{selectedBank.title}</CardTitle>
-                      <Badge variant="secondary" className="text-xs">
+                      <CardTitle className="text-base font-bold text-slate-900">{selectedBank.title}</CardTitle>
+                      <Badge variant="secondary" className="text-xs bg-[#FFF2E5] text-[#D97706] font-semibold border-amber-200">
                         {selectedBank.subject}
                       </Badge>
                       {selectedBank.topic && (
-                        <Badge variant="outline" className="text-xs text-muted-foreground">
+                        <Badge variant="outline" className="text-xs text-stone-500">
                           {selectedBank.topic}
                         </Badge>
                       )}
                     </div>
                     {selectedBank.description && (
-                      <p className="text-xs text-muted-foreground mt-1">{selectedBank.description}</p>
+                      <p className="text-xs text-stone-500 mt-1">{selectedBank.description}</p>
                     )}
                   </div>
 
@@ -520,19 +520,18 @@ export const TeacherQuestionBank: React.FC = () => {
                       variant="outline"
                       size="sm"
                       onClick={() => handleExportJson(selectedBank.id)}
-                      className="text-xs h-8 gap-1.5"
+                      className="text-xs h-8 gap-1.5 rounded-xl border-stone-200 bg-white"
                     >
                       <Download className="w-3.5 h-3.5" /> Export JSON
                     </Button>
                     <Button
-                      variant="default"
                       size="sm"
                       onClick={() => {
                         setEditingItem(null);
                         resetQuestionForm();
                         setShowAddQuestionModal(true);
                       }}
-                      className="text-xs h-8 gap-1.5"
+                      className="text-xs h-8 gap-1.5 rounded-xl bg-[#D97706] hover:bg-[#B45309] text-white font-semibold"
                     >
                       <Plus className="w-3.5 h-3.5" /> Add Question
                     </Button>
@@ -540,7 +539,7 @@ export const TeacherQuestionBank: React.FC = () => {
                       variant="destructive"
                       size="sm"
                       onClick={() => handleDeleteBank(selectedBank.id)}
-                      className="text-xs h-8 p-2"
+                      className="text-xs h-8 p-2 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 border border-rose-200"
                       title="Delete Question Bank"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -549,17 +548,17 @@ export const TeacherQuestionBank: React.FC = () => {
                 </div>
 
                 {/* Sub-bar: Selection and Stats */}
-                <div className="flex items-center justify-between mt-4 pt-3 border-t border-border/50 text-xs">
+                <div className="flex items-center justify-between mt-4 pt-3 border-t border-stone-200/60 text-xs">
                   <div className="flex items-center gap-3">
                     <button
                       onClick={toggleSelectAll}
-                      className="text-primary hover:underline font-medium text-xs flex items-center gap-1"
+                      className="text-[#D97706] hover:underline font-semibold text-xs flex items-center gap-1"
                     >
                       {selectedItemIds.length === selectedBank.items.length && selectedBank.items.length > 0
                         ? "Deselect All"
                         : "Select All Questions"}
                     </button>
-                    <span className="text-muted-foreground">
+                    <span className="text-stone-500">
                       Selected: <strong>{selectedItemIds.length}</strong> of {selectedBank.items.length}
                     </span>
                   </div>
@@ -568,7 +567,7 @@ export const TeacherQuestionBank: React.FC = () => {
                     <Button
                       size="sm"
                       onClick={handleOpenSendToExam}
-                      className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+                      className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 rounded-xl"
                     >
                       <Send className="w-3 h-3" /> Add {selectedItemIds.length} to Exam
                     </Button>
